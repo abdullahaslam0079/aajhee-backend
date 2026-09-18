@@ -1249,12 +1249,12 @@ class PhoneAuthAPITests(APITestCase):
         user = User.objects.get(firebase_uid="firebase-uid-1")
         self.assertEqual(user.account_type, User.AccountType.CONSUMER)
         self.assertEqual(user.phone, "+491701234567")
-        self.assertTrue(user.email.endswith("@phone.goluto.local"))
+        self.assertTrue(user.email.endswith("@phone.aajhee.local"))
         self.assertFalse(user.has_usable_password())
 
     def test_phone_auth_logs_in_existing_consumer(self):
         existing = User.objects.create_user(
-            email="491709999999@phone.goluto.local",
+            email="491709999999@phone.aajhee.local",
             password="unused",
             account_type=User.AccountType.CONSUMER,
             phone="+491709999999",
@@ -1359,7 +1359,7 @@ class PhoneAuthAPITests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         user = User.objects.get(firebase_uid="apple-uid-1")
-        self.assertTrue(user.email.endswith("@firebase.goluto.local"))
+        self.assertTrue(user.email.endswith("@firebase.aajhee.local"))
         self.assertFalse(user.has_usable_password())
 
 
@@ -1427,11 +1427,53 @@ class ListingDiscoverTests(TestCase):
         self.assertEqual(urls, ["https://shop.example.com/p/red-mug-123"])
 
 
+class FetchPublicTextTests(TestCase):
+    def test_retries_with_browser_ua_after_403(self):
+        from unittest.mock import patch
+
+        from .product_import import (
+            BROWSER_USER_AGENT,
+            USER_AGENT,
+            ProductImportError,
+            fetch_public_text,
+        )
+
+        def once(_url, *, user_agent):
+            if user_agent == USER_AGENT:
+                raise ProductImportError("fetch_blocked", "blocked", http_status=403)
+            self.assertEqual(user_agent, BROWSER_USER_AGENT)
+            return ("<html><body>ok</body></html>", 200)
+
+        with patch("discounts.product_import._fetch_public_text_once", side_effect=once):
+            text, status_code = fetch_public_text("https://shop.example.com/sale")
+        self.assertEqual(status_code, 200)
+        self.assertIn("ok", text)
+
+    def test_challenge_page_is_blocked(self):
+        from unittest.mock import patch
+
+        from .product_import import ProductImportError, fetch_public_text
+
+        html = (
+            "<html><body>"
+            '<script>window.location="https://www.zara.com/?bm-verify=abc"</script>'
+            "</body></html>"
+        )
+        with patch(
+            "discounts.product_import._fetch_public_text_once",
+            return_value=(html, 200),
+        ):
+            with self.assertRaises(ProductImportError) as ctx:
+                fetch_public_text("https://www.zara.com/de/en/sale")
+        self.assertEqual(ctx.exception.code, "fetch_blocked")
+        self.assertIn("zara.com blocked automated access", ctx.exception.message)
+
+
 class AffiliateFeedTests(TestCase):
     def test_csv_rows(self):
         from unittest.mock import patch
 
-        from .affiliate_feed import parse_affiliate_feed
+        from .affiliate_feed import _from_csv, parse_affiliate_feed
 
         csv_text = (
             "id,title,price,sale_price,link,image\n"
@@ -1442,8 +1484,8 @@ class AffiliateFeedTests(TestCase):
             return_value="https://feeds.example.com/products.csv",
         ):
             with patch(
-                "discounts.affiliate_feed.fetch_public_text",
-                return_value=(csv_text, 200),
+                "discounts.affiliate_feed._iter_feed_rows",
+                return_value=_from_csv(csv_text),
             ):
                 deals = parse_affiliate_feed("https://feeds.example.com/products.csv")
         self.assertEqual(len(deals), 1)
@@ -1451,6 +1493,49 @@ class AffiliateFeedTests(TestCase):
         self.assertEqual(deals[0].title, "Coffee")
         self.assertEqual(deals[0].original_price, "10.00")
         self.assertEqual(deals[0].discounted_price, "7.00")
+
+    def test_awin_gzip_csv_prefers_discounted_rows(self):
+        import gzip
+        import io
+        from unittest.mock import patch
+
+        from .affiliate_feed import parse_affiliate_feed
+
+        csv_text = (
+            "aw_product_id,product_name,search_price,rrp_price,aw_deep_link,aw_image_url\n"
+            "1,Full price,20.00,20.00,https://www.awin1.com/pclick.php?p=1,https://cdn.example.com/a.jpg\n"
+            "2,Sale bag,9.99,19.99,https://www.awin1.com/pclick.php?p=2,https://cdn.example.com/b.jpg\n"
+        )
+        payload = gzip.compress(csv_text.encode("utf-8"))
+
+        class FakeResponse(io.BytesIO):
+            status = 200
+            headers = {}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        with patch(
+            "discounts.affiliate_feed.validate_public_http_url",
+            return_value="https://productdata.awin.com/datafeed/download/apikey/test",
+        ):
+            with patch(
+                "discounts.affiliate_feed.urlopen",
+                return_value=FakeResponse(payload),
+            ):
+                deals = parse_affiliate_feed(
+                    "https://productdata.awin.com/datafeed/download/apikey/test",
+                    limit=1,
+                )
+        self.assertEqual(len(deals), 1)
+        self.assertEqual(deals[0].source_key, "feed:2")
+        self.assertEqual(deals[0].title, "Sale bag")
+        self.assertEqual(deals[0].original_price, "19.99")
+        self.assertEqual(deals[0].discounted_price, "9.99")
+        self.assertTrue(deals[0].source_url.startswith("https://www.awin1.com/"))
 
 
 class OfferSyncTests(TestCase):

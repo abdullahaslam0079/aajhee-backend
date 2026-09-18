@@ -12,7 +12,7 @@ const copy = {
     eyebrow: "Bald in Deutschland",
     heroTitle: "Sparen, wo du sowieso einkaufst.",
     heroLede:
-      "Goluto macht Angebote in deutschen Läden und Online-Shops sichtbar. Du siehst den Deal, gehst hin oder klickst dich zum Shop.",
+      "Aajhee macht Angebote in deutschen Läden und Online-Shops sichtbar. Du siehst den Deal, gehst hin oder klickst dich zum Shop.",
     chInstore: "Im Laden",
     chOnline: "Online",
     notifyTitle: "Bald zum Download",
@@ -21,7 +21,7 @@ const copy = {
     iosTop: "Laden im",
     playTop: "Jetzt bei",
     cardLine: "Im Laden · Online",
-    promiseTitle: "Wofür Goluto steht",
+    promiseTitle: "Wofür Aajhee steht",
     promiseLede:
       "Die App ist noch nicht live. Statt erfundener Zahlen zeigen wir, was schon feststeht.",
     p1t: "Deutschland zuerst",
@@ -34,8 +34,8 @@ const copy = {
     p4: "Händler können sich jetzt schon melden. Die App folgt in iOS und Android.",
     introTitle: "Willkommen bei der Spar-App für Deutschland.",
     introBody:
-      "Mode in der Innenstadt, der Wocheneinkauf, Elektronik im Netz, der Kaffee um die Ecke: Goluto sammelt, was sich lohnt — in der Nähe und online.",
-    introTag: "Einkaufen? Dann mit Goluto.",
+      "Mode in der Innenstadt, der Wocheneinkauf, Elektronik im Netz, der Kaffee um die Ecke: Aajhee sammelt, was sich lohnt — in der Nähe und online.",
+    introTag: "Einkaufen? Dann mit Aajhee.",
     howTitle: "So funktioniert’s",
     howLede: "Kein Scanner. Kein Lieferdienst. Nur der Deal, wenn du ihn brauchst.",
     h1t: "Finden",
@@ -51,7 +51,7 @@ const copy = {
     s3t: "Auch vom Sofa aus.",
     s3b: "Online-Shops liegen neben den Läden in derselben App. Filter auf „Online“, tippe dich zum Angebot, fertig. Kein Lieferdienst von uns — nur die Deals, die du im Netz sowieso suchst.",
     s4t: "Zeig deine Marke dort, wo Leute sparen.",
-    s4b: "Goluto ist die Bühne für Händler: Filiale, Angebot, Sichtbarkeit bei Leuten in der Straße und im Feed. Wir starten klein und ernsthaft — schreib uns, wenn dein Laden oder Shop dabei sein soll.",
+    s4b: "Aajhee ist die Bühne für Händler: Filiale, Angebot, Sichtbarkeit bei Leuten in der Straße und im Feed. Wir starten klein und ernsthaft — schreib uns, wenn dein Laden oder Shop dabei sein soll.",
     learnMore: "Mehr erfahren",
     shopCta: "Als Partner schreiben",
     joinTitle: "Drei Wege, dabei zu sein",
@@ -60,20 +60,20 @@ const copy = {
     j2t: "Für Händler",
     j2b: "Filiale anlegen, Deal live stellen, von Leuten in der Nähe gefunden werden. Dashboard statt Flyerberg.",
     j3t: "Mitgestalten",
-    j3b: "Wir bauen Goluto in Deutschland auf. Wenn du mitmachen willst — Produkt, Partnerschaften, oder einfach Feedback — schreib uns.",
+    j3b: "Wir bauen Aajhee in Deutschland auf. Wenn du mitmachen willst — Produkt, Partnerschaften, oder einfach Feedback — schreib uns.",
     catsTitle: "Alltag, nur günstiger.",
-    catsLede: "So sieht die Welt aus, in der Goluto unterwegs ist — noch ohne Live-Rabatte, aber mit klarem Fokus.",
+    catsLede: "So sieht die Welt aus, in der Aajhee unterwegs ist — noch ohne Live-Rabatte, aber mit klarem Fokus.",
     cat1: "Mode",
     cat2: "Alltag",
     cat3: "Elektronik",
     cat4: "Cafés",
     cat5: "Genuss",
-    dlTitle: "Goluto startet in Deutschland.",
+    dlTitle: "Aajhee startet in Deutschland.",
     dlSub: "Sag uns Bescheid — wir schreiben dir, wenn die App live ist.",
     waitLabel: "E-Mail",
     waitPh: "deine@email.de",
     waitBtn: "Sag Bescheid",
-    mailCta: "hello@goluto.de",
+    mailCta: "hello@aajhee.com",
     footTag: "Im Laden und online. Für Deutschland.",
     footLinks: "Links",
     footContact: "Kontakt",
@@ -93,7 +93,7 @@ const copy = {
     eyebrow: "Coming to Germany",
     heroTitle: "Save where you already shop.",
     heroLede:
-      "Goluto makes deals in German stores and online shops easy to see. Spot the offer, walk in or tap through to the shop.",
+      "Aajhee makes deals in German stores and online shops easy to see. Spot the offer, walk in or tap through to the shop.",
     chInstore: "In-store",
     chOnline: "Online",
     notifyTitle: "Download coming soon",
@@ -102,7 +102,7 @@ const copy = {
     iosTop: "Download on the",
     playTop: "Get it on",
     cardLine: "In-store · Online",
-    promiseTitle: "What Goluto stands for",
+    promiseTitle: "What Aajhee stands for",
     promiseLede:
       "The app is not live yet. Instead of vanity stats, here is what is already decided.",
     p1t: "Germany first",
@@ -115,8 +115,8 @@ const copy = {
     p4: "Merchants can reach out now. The app follows on iOS and Android.",
     introTitle: "Welcome to the savings app for Germany.",
     introBody:
-      "Fashion in the city, the weekly shop, electronics online, the café on the corner: Goluto gathers what’s worth it — nearby and online.",
-    introTag: "Shopping? Do it with Goluto.",
+      "Fashion in the city, the weekly shop, electronics online, the café on the corner: Aajhee gathers what’s worth it — nearby and online.",
+    introTag: "Shopping? Do it with Aajhee.",
     howTitle: "How it works",
     howLede: "No scanner. No delivery. Just the deal, when you need it.",
     h1t: "Find",
@@ -132,7 +132,7 @@ const copy = {
     s3t: "From the sofa, too.",
     s3b: "Online shops sit next to local stores in the same app. Filter to Online, tap through to the offer, done. We don’t deliver — we surface the deals you’d look for anyway.",
     s4t: "Show your brand where people save.",
-    s4b: "Goluto is the stage for merchants: a branch, an offer, visibility with people on the street and in the feed. We start small and serious — write us if your shop should be in.",
+    s4b: "Aajhee is the stage for merchants: a branch, an offer, visibility with people on the street and in the feed. We start small and serious — write us if your shop should be in.",
     learnMore: "Learn more",
     shopCta: "Write as a partner",
     joinTitle: "Three ways to join",
@@ -141,20 +141,20 @@ const copy = {
     j2t: "For merchants",
     j2b: "Add a branch, publish a deal, get found by people nearby. A dashboard instead of a stack of flyers.",
     j3t: "Build with us",
-    j3b: "We’re building Goluto in Germany. If you want in — product, partnerships, or just feedback — write us.",
+    j3b: "We’re building Aajhee in Germany. If you want in — product, partnerships, or just feedback — write us.",
     catsTitle: "Everyday life, just cheaper.",
-    catsLede: "This is the world Goluto is built for — no live discounts yet, but a clear focus.",
+    catsLede: "This is the world Aajhee is built for — no live discounts yet, but a clear focus.",
     cat1: "Fashion",
     cat2: "Everyday",
     cat3: "Electronics",
     cat4: "Cafés",
     cat5: "Treats",
-    dlTitle: "Goluto is launching in Germany.",
+    dlTitle: "Aajhee is launching in Germany.",
     dlSub: "Tell us you’re in — we’ll write when the app is live.",
     waitLabel: "Email",
     waitPh: "you@email.com",
     waitBtn: "Notify me",
-    mailCta: "hello@goluto.de",
+    mailCta: "hello@aajhee.com",
     footTag: "In-store and online. For Germany.",
     footLinks: "Links",
     footContact: "Contact",
@@ -177,7 +177,7 @@ function applyLang(lang) {
   document.querySelectorAll(".lang button").forEach((btn) => {
     btn.setAttribute("aria-pressed", String(btn.dataset.lang === lang));
   });
-  localStorage.setItem("goluto-lang", lang);
+  localStorage.setItem("aajhee-lang", lang);
 }
 
 document.querySelectorAll(".lang button").forEach((btn) => {
@@ -333,7 +333,7 @@ if (!reduce) {
   document.querySelector(".steps")?.classList.add("in-view");
 }
 
-applyLang(localStorage.getItem("goluto-lang") || "de");
+applyLang(localStorage.getItem("aajhee-lang") || "de");
 
 document.querySelectorAll(".store.is-soon").forEach((el) => {
   el.addEventListener("click", (event) => event.preventDefault());
@@ -343,7 +343,7 @@ document.getElementById("waitlist")?.addEventListener("submit", (event) => {
   event.preventDefault();
   const email = event.target.email?.value?.trim();
   if (!email) return;
-  const subject = encodeURIComponent("Goluto Launch");
+  const subject = encodeURIComponent("Aajhee Launch");
   const body = encodeURIComponent(`Bitte benachrichtigen: ${email}`);
-  window.location.href = `mailto:hello@goluto.de?subject=${subject}&body=${body}`;
+  window.location.href = `mailto:hello@aajhee.com?subject=${subject}&body=${body}`;
 });

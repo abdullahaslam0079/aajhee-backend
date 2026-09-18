@@ -82,7 +82,7 @@ def _call_gemini(
     excerpt = _truncate((page_text or "").strip(), MAX_PAGE_TEXT_CHARS)
 
     system_instruction = (
-        "You enrich local-discount offer drafts for GoLuto. "
+        "You enrich local-discount offer drafts for Aajhee. "
         "Return ONLY valid JSON matching the schema. "
         "Prefer facts from the page text. Do not invent specific prices unless clearly present. "
         "If a field cannot be determined, use null or an empty string. "

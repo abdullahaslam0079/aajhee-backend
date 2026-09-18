@@ -32,7 +32,7 @@ def send_password_reset_email(user, reset_token: PasswordResetToken) -> None:
     message_lines = [
         "Hello,",
         "",
-        "We received a request to reset your GoLuto password.",
+        "We received a request to reset your Aajhee password.",
         "",
         f"Your reset token: {token}",
     ]
@@ -45,12 +45,12 @@ def send_password_reset_email(user, reset_token: PasswordResetToken) -> None:
             "",
             "If you did not request a password reset, you can ignore this email.",
             "",
-            "— GoLuto",
+            "— Aajhee",
         ]
     )
 
     send_mail(
-        subject="Reset your GoLuto password",
+        subject="Reset your Aajhee password",
         message="\n".join(message_lines),
         from_email=settings.DEFAULT_FROM_EMAIL,
         recipient_list=[user.email],

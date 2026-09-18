@@ -13,8 +13,8 @@ from .firebase_app import get_firebase_app
 logger = logging.getLogger(__name__)
 User = get_user_model()
 
-_PHONE_LOCAL_DOMAIN = "phone.goluto.local"
-_FIREBASE_LOCAL_DOMAIN = "firebase.goluto.local"
+_PHONE_LOCAL_DOMAIN = "phone.aajhee.local"
+_FIREBASE_LOCAL_DOMAIN = "firebase.aajhee.local"
 
 
 def _synthetic_email_for_phone(phone: str) -> str:

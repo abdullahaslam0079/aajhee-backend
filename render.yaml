@@ -2,14 +2,14 @@
 # After connect: set GitHub repo, or use "Apply" from dashboard with this file.
 
 databases:
-  - name: goluto-db
-    databaseName: goluto
-    user: goluto
+  - name: aajhee-db
+    databaseName: aajhee
+    user: aajhee
     plan: free
 
 services:
   - type: web
-    name: goluto-backend
+    name: aajhee-backend
     runtime: python
     plan: free
     buildCommand: pip install --retries 15 --timeout 120 -r requirements.txt && python manage.py collectstatic --noinput
@@ -26,7 +26,7 @@ services:
         value: "2"
       - key: DATABASE_URL
         fromDatabase:
-          name: goluto-db
+          name: aajhee-db
           property: connectionString
       # Persistent uploads (logos/images). Local disk on Render is ephemeral.
       # Create a Cloudflare R2 or AWS S3 bucket, then set these in the dashboard.

@@ -17,8 +17,12 @@ from bs4 import BeautifulSoup
 from .ai_enrichment import enrich_product_draft
 
 USER_AGENT = (
-    "Mozilla/5.0 (compatible; GoLutoBot/1.0; +https://goluto.app; "
+    "Mozilla/5.0 (compatible; AajheeBot/1.0; +https://aajhee.com; "
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36)"
+)
+BROWSER_USER_AGENT = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 )
 FETCH_TIMEOUT_SECONDS = 15
 MAX_RESPONSE_BYTES = 2_000_000
@@ -122,10 +126,35 @@ def validate_public_http_url(url: str) -> str:
 
 
 def fetch_public_text(url: str) -> tuple[str, int]:
+    last_error: ProductImportError | None = None
+    for user_agent in (USER_AGENT, BROWSER_USER_AGENT):
+        try:
+            text, status_code = _fetch_public_text_once(url, user_agent=user_agent)
+        except ProductImportError as exc:
+            last_error = exc
+            if exc.http_status in {401, 403, 429} and user_agent != BROWSER_USER_AGENT:
+                continue
+            raise
+        if _looks_like_bot_block(text, status_code):
+            last_error = ProductImportError(
+                "fetch_blocked",
+                _blocked_message(url, status_code or 403),
+                http_status=status_code or 403,
+            )
+            if user_agent != BROWSER_USER_AGENT:
+                continue
+            raise last_error
+        return text, status_code
+    if last_error:
+        raise last_error
+    raise ProductImportError("fetch_failed", "Failed to fetch page.")
+
+
+def _fetch_public_text_once(url: str, *, user_agent: str) -> tuple[str, int]:
     request = Request(
         url,
         headers={
-            "User-Agent": USER_AGENT,
+            "User-Agent": user_agent,
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,text/csv;q=0.8,*/*;q=0.7",
             "Accept-Language": "de-DE,de;q=0.9,en;q=0.8",
         },
@@ -167,6 +196,12 @@ def fetch_public_text(url: str) -> tuple[str, int]:
                 f"Failed to fetch page (HTTP {code}).",
                 http_status=code,
             ) from exc
+        if code in {401, 403, 429}:
+            raise ProductImportError(
+                "fetch_blocked",
+                _blocked_message(url, code),
+                http_status=code,
+            ) from exc
         raise ProductImportError(
             "fetch_failed",
             f"Failed to fetch page (HTTP {code}).",
@@ -174,6 +209,28 @@ def fetch_public_text(url: str) -> tuple[str, int]:
         ) from exc
     except (URLError, TimeoutError, OSError) as exc:
         raise ProductImportError("fetch_failed", "Failed to fetch page.") from exc
+
+
+def _blocked_message(url: str, status_code: int) -> str:
+    host = (urlparse(url).hostname or "this shop").lower()
+    if host.startswith("www."):
+        host = host[4:]
+    return (
+        f"{host} blocked automated access (HTTP {status_code}). "
+        "The page opens in your browser, but the shop blocks Goluto's server. "
+        "Use an affiliate feed, or import individual product URLs."
+    )
+
+
+def _looks_like_bot_block(text: str, status_code: int) -> bool:
+    if status_code in {401, 403, 429}:
+        return True
+    sample = (text or "")[:4000].lower()
+    if "access denied" in sample and "permission to access" in sample:
+        return True
+    if "bm-verify" in sample:
+        return True
+    return False
 
 
 def _fetch_html(url: str) -> str:

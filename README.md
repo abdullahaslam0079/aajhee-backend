@@ -1,4 +1,4 @@
-# GoLuto-backend
+# aajhee-backend
 
 Django REST API for categories, offers, map businesses, JWT auth, and user preferences.
 
@@ -15,8 +15,8 @@ python manage.py runserver
 
 ## API docs
 
-- **Production Swagger:** https://goluto-backend.onrender.com/api/docs/
-- **Production OpenAPI:** https://goluto-backend.onrender.com/api/schema/
+- **Production Swagger:** https://api.aajhee.com/api/docs/
+- **Production OpenAPI:** https://api.aajhee.com/api/schema/
 - Local OpenAPI: `http://127.0.0.1:8000/api/schema/`
 - Local Swagger: `http://127.0.0.1:8000/api/docs/`
 
@@ -26,14 +26,14 @@ Share these files with anyone testing the API:
 
 | File | Purpose |
 |------|---------|
-| [`postman/GoLuto-API.postman_collection.json`](postman/GoLuto-API.postman_collection.json) | All endpoints, sample bodies, auto-save JWT on login |
-| [`postman/GoLuto-Production.postman_environment.json`](postman/GoLuto-Production.postman_environment.json) | `base_url` → production |
-| [`postman/GoLuto-Local.postman_environment.json`](postman/GoLuto-Local.postman_environment.json) | `base_url` → local dev server |
+| [`postman/Aajhee-API.postman_collection.json`](postman/Aajhee-API.postman_collection.json) | All endpoints, sample bodies, auto-save JWT on login |
+| [`postman/Aajhee-Production.postman_environment.json`](postman/Aajhee-Production.postman_environment.json) | `base_url` → production |
+| [`postman/Aajhee-Local.postman_environment.json`](postman/Aajhee-Local.postman_environment.json) | `base_url` → local dev server |
 
 **Import in Postman**
 
-1. **Import** → drag the collection + environment JSON files (or **Link** → `https://goluto-backend.onrender.com/api/schema/` to import from OpenAPI only).
-2. Select **GoLuto — Production** (top-right environment dropdown).
+1. **Import** → drag the collection + environment JSON files (or **Link** → `https://api.aajhee.com/api/schema/` to import from OpenAPI only).
+2. Select **Aajhee — Production** (top-right environment dropdown).
 3. Run **Auth — Consumer → Login** or **Auth — Business → Login** — the access token is saved automatically.
 4. Call endpoints in **Public**, **Consumer**, or **Business** folders.
 
@@ -41,7 +41,7 @@ Regenerate the collection after endpoint changes: `python3 postman/generate_coll
 
 ## Auth (JWT)
 
-Consumer apps use **Firebase Auth** (phone OTP, Google, or Apple). The app signs in with Firebase, then exchanges the Firebase ID token for GoLuto JWTs:
+Consumer apps use **Firebase Auth** (phone OTP, Google, or Apple). The app signs in with Firebase, then exchanges the Firebase ID token for Aajhee JWTs:
 
 - `POST /api/auth/firebase` — `{ "id_token": "<firebase_id_token>" }` → `access`, `refresh`, `user`, `addresses`
 - `POST /api/auth/phone` — same as `/api/auth/firebase` (backwards-compatible alias)
@@ -64,7 +64,7 @@ FIREBASE_CREDENTIALS_PATH=/absolute/path/to/firebase-adminsdk.json
 FIREBASE_CREDENTIALS_JSON={"type":"service_account",...}
 ```
 
-Download the key from [Firebase Console](https://console.firebase.google.com/) → Project settings → Service accounts → Generate new private key. The `project_id` must match the mobile apps (`goluto-c5020`).
+Download the key from [Firebase Console](https://console.firebase.google.com/) → Project settings → Service accounts → Generate new private key. The `project_id` must match the mobile apps (`aajhee`).
 
 **Render (production):** Web Service → Environment → add `FIREBASE_CREDENTIALS_JSON` with the **entire** service-account JSON as one line (minified). Do not use `FIREBASE_CREDENTIALS_PATH` on Render unless you also upload a [Secret File](https://render.com/docs/configure-environment-variables#secret-files). Redeploy after setting it.
 
@@ -139,7 +139,7 @@ Without `GEMINI_API_KEY`, the endpoint behaves exactly as before (scrape-only dr
 
 ### Brand listing / affiliate offer sync
 
-Attach a **deal source** to a business (sale page URL or affiliate CSV/XML feed). Sync imports new products into a review queue (`is_enabled=false`). After you approve, later syncs refresh prices and **disable** offers that disappeared, 404, or are out of stock. Manual offers are never changed.
+Attach a **deal source** to a business (sale page URL or affiliate CSV/XML feed). For AWIN, use **Toolbox → Create-a-Feed** and paste the gzip CSV feed URL (not a Link Builder deep link). Sync imports new products into a review queue (`is_enabled=false`). After you approve, later syncs refresh prices and **disable** offers that disappeared, 404, or are out of stock. Manual offers are never changed.
 
 Admin: `POST /api/admin/deal-sources/<id>/sync` (Sync now in the admin web app).
 
@@ -171,7 +171,7 @@ git init
 git add .
 git commit -m "first commit"
 git branch -M main
-git remote add origin https://github.com/abdullahaslam0079/GoLuto-backend.git
+git remote add origin https://github.com/abdullahaslam0079/aajhee-backend.git
 git push -u origin main
 ```
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate postman/GoLuto-API.postman_collection.json from endpoint definitions."""
+"""Generate postman/Aajhee-API.postman_collection.json from endpoint definitions."""
 
 from __future__ import annotations
 
@@ -119,21 +119,21 @@ def folder(name: str, items: list, *, auth_bearer: str | None = None, descriptio
 collection = {
     "info": {
         "_postman_id": COLLECTION_ID,
-        "name": "GoLuto API",
+        "name": "Aajhee API",
         "description": (
             "Discount Discovery API — categories, offers, map, consumer & business accounts.\n\n"
             "**Quick start**\n"
-            "1. Import `GoLuto-Production.postman_environment.json` (or Local).\n"
+            "1. Import `Aajhee-Production.postman_environment.json` (or Local).\n"
             "2. Select the environment in Postman.\n"
             "3. Run **Auth → Consumer Login** or **Business Login** to store JWT tokens.\n"
             "4. Call protected endpoints in the Consumer / Business folders.\n\n"
-            "**Live docs:** https://goluto-backend.onrender.com/api/docs/\n"
-            "**OpenAPI schema:** https://goluto-backend.onrender.com/api/schema/"
+            "**Live docs:** https://api.aajhee.com/api/docs/\n"
+            "**OpenAPI schema:** https://api.aajhee.com/api/schema/"
         ),
         "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
     },
     "variable": [
-        {"key": "base_url", "value": "https://goluto-backend.onrender.com"},
+        {"key": "base_url", "value": "https://api.aajhee.com"},
         {"key": "consumer_token", "value": ""},
         {"key": "business_token", "value": ""},
         {"key": "admin_token", "value": ""},
@@ -154,7 +154,7 @@ collection = {
                     body={"id_token": "<firebase_id_token>"},
                     description=(
                         "Alias of Firebase Login. Exchange a Firebase Phone Auth "
-                        "ID token for GoLuto JWTs."
+                        "ID token for Aajhee JWTs."
                     ),
                     test=CONSUMER_LOGIN_TEST,
                 ),
@@ -165,7 +165,7 @@ collection = {
                     body={"id_token": "<firebase_id_token>"},
                     description=(
                         "Preferred consumer auth for phone, Google, or Apple. "
-                        "Exchange a Firebase ID token for GoLuto JWTs."
+                        "Exchange a Firebase ID token for Aajhee JWTs."
                     ),
                     test=CONSUMER_LOGIN_TEST,
                 ),
@@ -700,6 +700,6 @@ collection = {
     ],
 }
 
-out = ROOT / "GoLuto-API.postman_collection.json"
+out = ROOT / "Aajhee-API.postman_collection.json"
 out.write_text(json.dumps(collection, indent=2) + "\n", encoding="utf-8")
 print(f"Wrote {out}")

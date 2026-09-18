@@ -1,14 +1,14 @@
 {
   "info": {
     "_postman_id": "629228f9-b9eb-4f3b-baf1-89ed9de7b0d4",
-    "name": "GoLuto API",
-    "description": "Discount Discovery API \u2014 categories, offers, map, consumer & business accounts.\n\n**Quick start**\n1. Import `GoLuto-Production.postman_environment.json` (or Local).\n2. Select the environment in Postman.\n3. Run **Auth \u2192 Consumer Login** or **Business Login** to store JWT tokens.\n4. Call protected endpoints in the Consumer / Business folders.\n\n**Live docs:** https://goluto-backend.onrender.com/api/docs/\n**OpenAPI schema:** https://goluto-backend.onrender.com/api/schema/",
+    "name": "Aajhee API",
+    "description": "Discount Discovery API \u2014 categories, offers, map, consumer & business accounts.\n\n**Quick start**\n1. Import `Aajhee-Production.postman_environment.json` (or Local).\n2. Select the environment in Postman.\n3. Run **Auth \u2192 Consumer Login** or **Business Login** to store JWT tokens.\n4. Call protected endpoints in the Consumer / Business folders.\n\n**Live docs:** https://api.aajhee.com/api/docs/\n**OpenAPI schema:** https://api.aajhee.com/api/schema/",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
     {
       "key": "base_url",
-      "value": "https://goluto-backend.onrender.com"
+      "value": "https://api.aajhee.com"
     },
     {
       "key": "consumer_token",
@@ -68,7 +68,7 @@
                 "phone"
               ]
             },
-            "description": "Alias of Firebase Login. Exchange a Firebase Phone Auth ID token for GoLuto JWTs.",
+            "description": "Alias of Firebase Login. Exchange a Firebase Phone Auth ID token for Aajhee JWTs.",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"id_token\": \"<firebase_id_token>\"\n}",
@@ -118,7 +118,7 @@
                 "firebase"
               ]
             },
-            "description": "Preferred consumer auth for phone, Google, or Apple. Exchange a Firebase ID token for GoLuto JWTs.",
+            "description": "Preferred consumer auth for phone, Google, or Apple. Exchange a Firebase ID token for Aajhee JWTs.",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"id_token\": \"<firebase_id_token>\"\n}",
