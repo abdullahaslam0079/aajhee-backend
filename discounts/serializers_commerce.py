@@ -154,6 +154,12 @@ class ProductSerializer(serializers.ModelSerializer):
         required=False,
     )
     image = OptionalImageField(required=False, allow_null=True, write_only=True)
+    images = serializers.ListField(
+        child=serializers.ImageField(),
+        required=False,
+        write_only=True,
+        help_text="Additional gallery images (multipart).",
+    )
     image_url = serializers.SerializerMethodField()
     gallery = ProductGallerySerializer(
         source="gallery_images", many=True, read_only=True
@@ -184,6 +190,7 @@ class ProductSerializer(serializers.ModelSerializer):
             "description",
             "detailed_description",
             "image",
+            "images",
             "image_url",
             "gallery",
             "base_price",
@@ -244,13 +251,23 @@ class ProductSerializer(serializers.ModelSerializer):
             )
         return attrs
 
+    def _set_gallery(self, product: Product, images: list | None):
+        if images is None:
+            return
+        product.gallery_images.all().delete()
+        for index, image in enumerate(images):
+            ProductGalleryImage.objects.create(
+                product=product, image=image, sort_order=index
+            )
+
     def create(self, validated_data):
         branches = validated_data.pop("branches", [])
+        images = validated_data.pop("images", None)
         business = self.context["business"]
         product = Product.objects.create(business=business, **validated_data)
         if branches:
             product.branches.set(branches)
-        # Normalize discount fields
+        self._set_gallery(product, images)
         if product.sale_price is not None:
             apply_sale_price(product, product.sale_price)
         elif product.discount_percent is not None:
@@ -259,11 +276,13 @@ class ProductSerializer(serializers.ModelSerializer):
 
     def update(self, instance, validated_data):
         branches = validated_data.pop("branches", None)
+        images = validated_data.pop("images", None)
         for key, value in validated_data.items():
             setattr(instance, key, value)
         instance.save()
         if branches is not None:
             instance.branches.set(branches)
+        self._set_gallery(instance, images)
         if "sale_price" in validated_data and validated_data["sale_price"] is not None:
             apply_sale_price(instance, validated_data["sale_price"])
         elif (
@@ -277,6 +296,28 @@ class ProductSerializer(serializers.ModelSerializer):
             if "sale_price" in validated_data or "discount_percent" in validated_data:
                 clear_discount(instance)
         return instance
+
+
+class AdminProductSerializer(ProductSerializer):
+    """Admin create/update — business is chosen explicitly."""
+
+    business_id = serializers.PrimaryKeyRelatedField(
+        queryset=Business.objects.all(),
+        source="business",
+    )
+
+    def create(self, validated_data):
+        branches = validated_data.pop("branches", [])
+        images = validated_data.pop("images", None)
+        product = Product.objects.create(**validated_data)
+        if branches:
+            product.branches.set(branches)
+        self._set_gallery(product, images)
+        if product.sale_price is not None:
+            apply_sale_price(product, product.sale_price)
+        elif product.discount_percent is not None:
+            apply_discount_percent(product, product.discount_percent)
+        return product
 
 
 class ProductDiscountSerializer(serializers.Serializer):

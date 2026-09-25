@@ -38,6 +38,7 @@ from .pagination import StandardResultsSetPagination
 from .permissions import IsAdminAccount, IsBusinessAccount, IsConsumerAccount
 from .product_pricing import apply_discount_percent, apply_sale_price, bulk_apply_percent, clear_discount
 from .serializers_commerce import (
+    AdminProductSerializer,
     BranchContactSerializer,
     BranchFulfillmentSettingsSerializer,
     BulkDiscountSerializer,
@@ -882,13 +883,37 @@ class AdminOrderListAPIView(generics.ListAPIView):
         return Order.objects.select_related("business", "branch", "user").all()
 
 
-class AdminProductListAPIView(generics.ListAPIView):
+class AdminProductListCreateAPIView(generics.ListCreateAPIView):
     permission_classes = [IsAuthenticated, IsAdminAccount]
-    serializer_class = ProductSerializer
+    serializer_class = AdminProductSerializer
     pagination_class = StandardResultsSetPagination
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
 
     def get_queryset(self):
-        return Product.objects.select_related("business", "category").all()
+        qs = (
+            Product.objects.select_related("business", "category", "engagement_stats")
+            .prefetch_related("branches", "gallery_images")
+            .order_by("-created_at")
+        )
+        business_id = self.request.query_params.get("business_id")
+        if business_id:
+            qs = qs.filter(business_id=business_id)
+        search = (self.request.query_params.get("search") or "").strip()
+        if search:
+            qs = qs.filter(Q(name__icontains=search) | Q(business__name__icontains=search))
+        return qs
+
+
+class AdminProductDetailAPIView(generics.RetrieveUpdateDestroyAPIView):
+    permission_classes = [IsAuthenticated, IsAdminAccount]
+    serializer_class = AdminProductSerializer
+    lookup_url_kwarg = "product_id"
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
+
+    def get_queryset(self):
+        return Product.objects.select_related("business", "category").prefetch_related(
+            "branches", "gallery_images"
+        )
 
 
 class EnsureGeoSeedAPIView(APIView):
