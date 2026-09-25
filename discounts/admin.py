@@ -11,6 +11,7 @@ from .models import (
     BranchContact,
     BranchFulfillmentSettings,
     Business,
+    BusinessCategory,
     Category,
     City,
     Country,
@@ -120,13 +121,18 @@ class CategoryAdmin(admin.ModelAdmin):
     list_filter = ("is_active",)
 
 
+class BusinessCategoryInline(admin.TabularInline):
+    model = BusinessCategory
+    extra = 1
+    autocomplete_fields = ("category",)
+
+
 @admin.register(Business)
 class BusinessAdmin(admin.ModelAdmin):
     list_display = ("id", "name", "owner", "category", "presence_mode", "online_coverage")
     list_filter = ("category", "presence_mode", "online_coverage")
     search_fields = ("name", "owner__email")
-    filter_horizontal = ("categories",)
-    inlines = [BranchInline, DealSourceInline]
+    inlines = [BusinessCategoryInline, BranchInline, DealSourceInline]
 
 
 @admin.register(Branch)
