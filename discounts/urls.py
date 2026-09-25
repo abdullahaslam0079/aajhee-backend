@@ -34,7 +34,9 @@ from .views import (
 from .views_admin import (
     AdminAnalyticsOverviewAPIView,
     AdminAnalyticsTimeseriesAPIView,
+    AdminBranchContactsAPIView,
     AdminBranchDetailAPIView,
+    AdminBranchFulfillmentAPIView,
     AdminBusinessBranchListCreateAPIView,
     AdminBusinessDealSourceListCreateAPIView,
     AdminBusinessDetailAPIView,
@@ -409,6 +411,16 @@ urlpatterns = [
         "admin/branches/<int:branch_id>",
         AdminBranchDetailAPIView.as_view(),
         name="admin-branch-detail",
+    ),
+    path(
+        "admin/branches/<int:branch_id>/contacts",
+        AdminBranchContactsAPIView.as_view(),
+        name="admin-branch-contacts",
+    ),
+    path(
+        "admin/branches/<int:branch_id>/fulfillment",
+        AdminBranchFulfillmentAPIView.as_view(),
+        name="admin-branch-fulfillment",
     ),
     path(
         "admin/businesses/<int:business_id>/deal-sources",

@@ -65,6 +65,16 @@ class BusinessRegisterSerializer(serializers.Serializer):
         },
     )
     logo = OptionalImageField(required=False, allow_null=True)
+    presence_mode = serializers.ChoiceField(
+        choices=Business.PresenceMode.choices,
+        required=False,
+        default=Business.PresenceMode.HYBRID,
+    )
+    online_coverage = serializers.ChoiceField(
+        choices=Business.OnlineCoverage.choices,
+        required=False,
+        default=Business.OnlineCoverage.CITY,
+    )
 
     def run_validation(self, data=serializers.empty):
         if data is not serializers.empty and hasattr(data, "get"):
@@ -106,6 +116,12 @@ class BusinessRegisterSerializer(serializers.Serializer):
         name = validated_data.pop("name")
         category = validated_data.pop("category")
         logo = validated_data.pop("logo", None)
+        presence_mode = validated_data.pop(
+            "presence_mode", Business.PresenceMode.HYBRID
+        )
+        online_coverage = validated_data.pop(
+            "online_coverage", Business.OnlineCoverage.CITY
+        )
 
         user = User.objects.create_user(
             email=email,
@@ -117,6 +133,8 @@ class BusinessRegisterSerializer(serializers.Serializer):
             name=name,
             category=category,
             logo=logo,
+            presence_mode=presence_mode,
+            online_coverage=online_coverage,
         )
         business.categories.add(category)
         return business
@@ -148,6 +166,8 @@ class BusinessProfileSerializer(serializers.ModelSerializer):
             "category_id",
             "category_name",
             "category",
+            "presence_mode",
+            "online_coverage",
         ]
         read_only_fields = ["id", "email", "category_name", "category"]
 

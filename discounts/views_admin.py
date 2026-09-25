@@ -14,8 +14,10 @@ from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.views import TokenObtainPairView
 
 from .auth_utils import blacklist_user_tokens, logout_response_message
+from .delivery_options import get_or_create_fulfillment_settings
 from .models import (
     Branch,
+    BranchContact,
     Business,
     BusinessEngagementStats,
     Category,
@@ -43,6 +45,10 @@ from .serializers_admin import (
     AdminProfileSerializer,
     AdminUserSerializer,
     AdminUserUpdateSerializer,
+)
+from .serializers_commerce import (
+    BranchContactSerializer,
+    BranchFulfillmentSettingsSerializer,
 )
 
 User = get_user_model()
@@ -451,6 +457,46 @@ class AdminBranchDetailAPIView(APIView):
             {"message": "Branch deleted successfully.", "errors": {}},
             status=status.HTTP_200_OK,
         )
+
+
+class AdminBranchContactsAPIView(APIView):
+    permission_classes = [IsAdminAccount]
+
+    def get(self, request, branch_id: int):
+        branch = get_object_or_404(Branch, pk=branch_id)
+        return Response(
+            BranchContactSerializer(branch.contacts.all(), many=True).data
+        )
+
+    def put(self, request, branch_id: int):
+        branch = get_object_or_404(Branch, pk=branch_id)
+        serializer = BranchContactSerializer(data=request.data, many=True)
+        serializer.is_valid(raise_exception=True)
+        branch.contacts.all().delete()
+        created = [
+            BranchContact.objects.create(branch=branch, **item)
+            for item in serializer.validated_data
+        ]
+        return Response(BranchContactSerializer(created, many=True).data)
+
+
+class AdminBranchFulfillmentAPIView(APIView):
+    permission_classes = [IsAdminAccount]
+
+    def get(self, request, branch_id: int):
+        branch = get_object_or_404(Branch, pk=branch_id)
+        settings = get_or_create_fulfillment_settings(branch)
+        return Response(BranchFulfillmentSettingsSerializer(settings).data)
+
+    def patch(self, request, branch_id: int):
+        branch = get_object_or_404(Branch, pk=branch_id)
+        settings = get_or_create_fulfillment_settings(branch)
+        serializer = BranchFulfillmentSettingsSerializer(
+            settings, data=request.data, partial=True
+        )
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data)
 
 
 @extend_schema_view(
