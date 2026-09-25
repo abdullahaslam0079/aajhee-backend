@@ -4,6 +4,14 @@ from __future__ import annotations
 
 from typing import Any, Iterable, Sequence
 
+from rest_framework.pagination import PageNumberPagination
+
+
+class StandardResultsSetPagination(PageNumberPagination):
+    page_size = 20
+    page_size_query_param = "page_size"
+    max_page_size = 100
+
 
 def parse_page_params(request, *, default_page_size: int = 20) -> tuple[int, int]:
     try:

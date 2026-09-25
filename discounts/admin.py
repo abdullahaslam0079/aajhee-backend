@@ -8,8 +8,12 @@ from django.db.models import Count, Q
 from .models import (
     Address,
     Branch,
+    BranchContact,
+    BranchFulfillmentSettings,
     Business,
     Category,
+    City,
+    Country,
     DealSource,
     DeviceToken,
     Notification,
@@ -21,6 +25,8 @@ from .models import (
     OfferRedemption,
     OfferScan,
     OfferViewEvent,
+    Order,
+    Product,
     User,
     UserPreferences,
 )
@@ -109,15 +115,17 @@ class DealSourceInline(admin.TabularInline):
 
 @admin.register(Category)
 class CategoryAdmin(admin.ModelAdmin):
-    list_display = ("id", "name")
-    search_fields = ("name",)
+    list_display = ("id", "name", "parent", "sort_order", "is_active")
+    search_fields = ("name", "slug")
+    list_filter = ("is_active",)
 
 
 @admin.register(Business)
 class BusinessAdmin(admin.ModelAdmin):
-    list_display = ("id", "name", "owner", "category")
-    list_filter = ("category",)
+    list_display = ("id", "name", "owner", "category", "presence_mode", "online_coverage")
+    list_filter = ("category", "presence_mode", "online_coverage")
     search_fields = ("name", "owner__email")
+    filter_horizontal = ("categories",)
     inlines = [BranchInline, DealSourceInline]
 
 
@@ -301,3 +309,66 @@ class AddressAdmin(admin.ModelAdmin):
     )
     list_filter = ("is_default", "city")
     search_fields = ("user__email", "street", "city")
+
+
+@admin.register(Country)
+class CountryAdmin(admin.ModelAdmin):
+    list_display = ("id", "code", "name")
+    search_fields = ("code", "name")
+
+
+@admin.register(City)
+class CityAdmin(admin.ModelAdmin):
+    list_display = ("id", "name", "country", "name_normalized")
+    list_filter = ("country",)
+    search_fields = ("name",)
+
+
+@admin.register(Product)
+class ProductAdmin(admin.ModelAdmin):
+    list_display = (
+        "id",
+        "name",
+        "business",
+        "category",
+        "base_price",
+        "sale_price",
+        "is_enabled",
+    )
+    list_filter = ("is_enabled", "category")
+    search_fields = ("name", "business__name")
+    filter_horizontal = ("branches",)
+
+
+@admin.register(Order)
+class OrderAdmin(admin.ModelAdmin):
+    list_display = (
+        "public_id",
+        "business",
+        "branch",
+        "status",
+        "fulfillment_type",
+        "payment_method",
+        "total",
+        "placed_at",
+    )
+    list_filter = ("status", "fulfillment_type", "payment_method")
+    search_fields = ("public_id", "business__name", "user__email")
+    readonly_fields = ("public_id", "placed_at")
+
+
+@admin.register(BranchContact)
+class BranchContactAdmin(admin.ModelAdmin):
+    list_display = ("branch", "contact_type", "value", "is_primary")
+    list_filter = ("contact_type",)
+
+
+@admin.register(BranchFulfillmentSettings)
+class BranchFulfillmentSettingsAdmin(admin.ModelAdmin):
+    list_display = (
+        "branch",
+        "pickup_enabled",
+        "local_same_day_enabled",
+        "nationwide_enabled",
+        "bank_transfer_enabled",
+    )

@@ -63,24 +63,24 @@ class AdminLoginTokenObtainPairSerializer(TokenObtainPairSerializer):
 
 class AdminCategorySerializer(serializers.ModelSerializer):
     business_count = serializers.SerializerMethodField()
+    parent_id = serializers.IntegerField(source="parent.id", read_only=True, allow_null=True)
 
     class Meta:
         model = Category
-        fields = ["id", "name", "business_count"]
-        read_only_fields = ["id", "business_count"]
+        fields = ["id", "name", "slug", "parent_id", "sort_order", "is_active", "business_count"]
+        read_only_fields = ["id", "business_count", "parent_id"]
 
     def get_business_count(self, obj: Category) -> int:
-        return getattr(obj, "business_count", obj.businesses.count())
+        return getattr(
+            obj,
+            "business_count",
+            obj.businesses.count() + obj.primary_businesses.count(),
+        )
 
     def validate_name(self, value: str) -> str:
         name = value.strip()
         if not name:
             raise serializers.ValidationError("Category name is required.")
-        qs = Category.objects.filter(name__iexact=name)
-        if self.instance:
-            qs = qs.exclude(pk=self.instance.pk)
-        if qs.exists():
-            raise serializers.ValidationError("A category with this name already exists.")
         return name
 
 

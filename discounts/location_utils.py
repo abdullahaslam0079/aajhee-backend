@@ -23,6 +23,8 @@ class UserLocation:
     latitude: Decimal
     longitude: Decimal
     city: str
+    city_id: int | None = None
+    country_id: int | None = None
 
     @property
     def city_normalized(self) -> str:
@@ -58,12 +60,16 @@ def resolve_user_location(request) -> UserLocation | None:
     lat = params.get("latitude")
     lon = params.get("longitude")
     city = params.get("city")
+    city_id = params.get("city_id")
+    country_id = params.get("country_id")
     if lat is not None and lon is not None and city and str(city).strip():
         try:
             return UserLocation(
                 latitude=Decimal(str(lat)),
                 longitude=Decimal(str(lon)),
                 city=str(city).strip(),
+                city_id=int(city_id) if city_id else None,
+                country_id=int(country_id) if country_id else None,
             )
         except Exception:
             return None
@@ -83,6 +89,10 @@ def resolve_user_location(request) -> UserLocation | None:
                 latitude=address.latitude,
                 longitude=address.longitude,
                 city=address.city,
+                city_id=address.city_ref_id,
+                country_id=(
+                    address.city_ref.country_id if address.city_ref_id else None
+                ),
             )
 
     address = user.addresses.filter(is_default=True).first()
@@ -95,6 +105,8 @@ def resolve_user_location(request) -> UserLocation | None:
         latitude=address.latitude,
         longitude=address.longitude,
         city=address.city,
+        city_id=address.city_ref_id,
+        country_id=address.city_ref.country_id if address.city_ref_id else None,
     )
 
 

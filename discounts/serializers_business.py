@@ -118,6 +118,7 @@ class BusinessRegisterSerializer(serializers.Serializer):
             category=category,
             logo=logo,
         )
+        business.categories.add(category)
         return business
 
 
@@ -129,8 +130,10 @@ class BusinessProfileSerializer(serializers.ModelSerializer):
         required=False,
         error_messages={"does_not_exist": "Selected category does not exist."},
     )
-    category_name = serializers.CharField(source="category.name", read_only=True)
-    category = CategorySerializer(read_only=True)
+    category_name = serializers.CharField(
+        source="category.name", read_only=True, allow_null=True
+    )
+    category = CategorySerializer(read_only=True, allow_null=True)
     logo = OptionalImageField(required=False, allow_null=True, write_only=True)
     logo_url = serializers.SerializerMethodField()
 
@@ -163,6 +166,11 @@ class BusinessProfileSerializer(serializers.ModelSerializer):
     def to_representation(self, instance):
         data = super().to_representation(instance)
         data["category_id"] = instance.category_id
+        data["presence_mode"] = instance.presence_mode
+        data["online_coverage"] = instance.online_coverage
+        data["category_ids"] = list(instance.categories.values_list("id", flat=True))
+        data["primary_city_id"] = instance.primary_city_id
+        data["primary_country_id"] = instance.primary_country_id
         return data
 
 

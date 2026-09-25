@@ -1056,12 +1056,17 @@ class AdminCategoryDetailAPIView(APIView):
 
     def delete(self, request, category_id: int):
         category = get_object_or_404(Category, pk=category_id)
-        if category.businesses.exists():
+        in_use = (
+            category.businesses.exists()
+            or category.primary_businesses.exists()
+            or category.products.exists()
+        )
+        if in_use:
             return Response(
                 {
-                    "message": "Cannot delete a category that has businesses.",
+                    "message": "Cannot delete a category that has businesses or products.",
                     "errors": {
-                        "category_id": ["Reassign or remove businesses first."]
+                        "category_id": ["Reassign or remove businesses/products first."]
                     },
                 },
                 status=status.HTTP_400_BAD_REQUEST,

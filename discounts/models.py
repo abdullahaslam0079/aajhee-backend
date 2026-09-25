@@ -65,25 +65,145 @@ class User(AbstractUser):
         return self.phone or self.email
 
 
-class Category(models.Model):
-    name = models.CharField(max_length=80, unique=True)
+class Country(models.Model):
+    code = models.CharField(max_length=2, unique=True)
+    name = models.CharField(max_length=80)
+
+    class Meta:
+        verbose_name_plural = "countries"
+        ordering = ["name", "id"]
 
     def __str__(self) -> str:
         return self.name
 
 
+class City(models.Model):
+    country = models.ForeignKey(
+        Country, on_delete=models.CASCADE, related_name="cities"
+    )
+    name = models.CharField(max_length=80)
+    name_normalized = models.CharField(max_length=80, db_index=True)
+
+    class Meta:
+        verbose_name_plural = "cities"
+        ordering = ["name", "id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["country", "name_normalized"],
+                name="unique_city_per_country",
+            )
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.name}, {self.country.code}"
+
+
+class Category(models.Model):
+    name = models.CharField(max_length=80)
+    slug = models.SlugField(max_length=100, blank=True)
+    parent = models.ForeignKey(
+        "self",
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="children",
+    )
+    sort_order = models.PositiveIntegerField(default=0)
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        verbose_name_plural = "categories"
+        ordering = ["sort_order", "name", "id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["parent", "name"],
+                name="unique_category_name_per_parent",
+            )
+        ]
+
+    def __str__(self) -> str:
+        if self.parent_id:
+            return f"{self.parent} → {self.name}"
+        return self.name
+
+
 class Business(models.Model):
+    class PresenceMode(models.TextChoices):
+        ONLINE_ONLY = "online_only", "Online only"
+        INSTORE_ONLY = "instore_only", "In-store only"
+        HYBRID = "hybrid", "Online and in-store"
+
+    class OnlineCoverage(models.TextChoices):
+        CITY = "city", "City"
+        COUNTRY = "country", "Whole country"
+
     owner = models.OneToOneField(
         User, on_delete=models.CASCADE, related_name="business_profile"
     )
     name = models.CharField(max_length=120)
     logo = models.ImageField(upload_to="business_logos/", null=True, blank=True)
+    # Legacy primary category — kept for backward-compatible APIs.
     category = models.ForeignKey(
-        Category, on_delete=models.CASCADE, related_name="businesses"
+        Category,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="primary_businesses",
+    )
+    categories = models.ManyToManyField(
+        Category,
+        through="BusinessCategory",
+        related_name="businesses",
+        blank=True,
+    )
+    presence_mode = models.CharField(
+        max_length=20,
+        choices=PresenceMode.choices,
+        default=PresenceMode.HYBRID,
+    )
+    online_coverage = models.CharField(
+        max_length=20,
+        choices=OnlineCoverage.choices,
+        default=OnlineCoverage.CITY,
+    )
+    primary_country = models.ForeignKey(
+        Country,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="primary_businesses",
+    )
+    primary_city = models.ForeignKey(
+        City,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="primary_businesses",
     )
 
     def __str__(self) -> str:
         return self.name
+
+
+class BusinessCategory(models.Model):
+    business = models.ForeignKey(
+        Business, on_delete=models.CASCADE, related_name="business_categories"
+    )
+    category = models.ForeignKey(
+        Category, on_delete=models.CASCADE, related_name="business_links"
+    )
+
+    class Meta:
+        verbose_name_plural = "business categories"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["business", "category"],
+                name="unique_business_category",
+            )
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.business_id}:{self.category_id}"
 
 
 class Branch(models.Model):
@@ -95,6 +215,13 @@ class Branch(models.Model):
     house_number = models.CharField(max_length=20)
     postal_code = models.CharField(max_length=20)
     city = models.CharField(max_length=80)
+    city_ref = models.ForeignKey(
+        City,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="branches",
+    )
     latitude = models.DecimalField(max_digits=9, decimal_places=6)
     longitude = models.DecimalField(max_digits=9, decimal_places=6)
 
@@ -108,6 +235,73 @@ class Branch(models.Model):
 
     def __str__(self) -> str:
         return f"{self.business.name} - {self.name}"
+
+
+class BranchContact(models.Model):
+    class ContactType(models.TextChoices):
+        WHATSAPP = "whatsapp", "WhatsApp"
+        PHONE = "phone", "Phone"
+        EMAIL = "email", "Email"
+
+    branch = models.ForeignKey(
+        Branch, on_delete=models.CASCADE, related_name="contacts"
+    )
+    contact_type = models.CharField(max_length=20, choices=ContactType.choices)
+    value = models.CharField(max_length=160)
+    is_primary = models.BooleanField(default=False)
+
+    class Meta:
+        ordering = ["-is_primary", "contact_type", "id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["branch", "contact_type", "value"],
+                name="unique_branch_contact_value",
+            )
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.branch_id}:{self.contact_type}"
+
+
+class BranchFulfillmentSettings(models.Model):
+    class CustomerCancelPolicy(models.TextChoices):
+        DISABLED = "disabled", "Customer cannot cancel"
+        WINDOW_MINUTES = "window_minutes", "Cancel within window"
+
+    branch = models.OneToOneField(
+        Branch, on_delete=models.CASCADE, related_name="fulfillment_settings"
+    )
+    pickup_enabled = models.BooleanField(default=True)
+    pickup_radius_km = models.DecimalField(
+        max_digits=6, decimal_places=2, default=Decimal("15.00")
+    )
+    local_same_day_enabled = models.BooleanField(default=True)
+    local_delivery_fee = models.DecimalField(
+        max_digits=10, decimal_places=2, default=Decimal("0.00")
+    )
+    local_max_delivery_hours = models.PositiveIntegerField(default=24)
+    nationwide_enabled = models.BooleanField(default=False)
+    nationwide_delivery_fee = models.DecimalField(
+        max_digits=10, decimal_places=2, default=Decimal("0.00")
+    )
+    nationwide_max_delivery_hours = models.PositiveIntegerField(default=72)
+    customer_cancel_policy = models.CharField(
+        max_length=32,
+        choices=CustomerCancelPolicy.choices,
+        default=CustomerCancelPolicy.WINDOW_MINUTES,
+    )
+    customer_cancel_window_minutes = models.PositiveIntegerField(
+        default=30,
+        help_text="Used when customer_cancel_policy is window_minutes.",
+    )
+    bank_transfer_enabled = models.BooleanField(default=False)
+    bank_transfer_instructions = models.TextField(blank=True)
+    cash_on_pickup_enabled = models.BooleanField(default=True)
+    cash_on_delivery_enabled = models.BooleanField(default=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self) -> str:
+        return f"Fulfillment<{self.branch_id}>"
 
 
 class DealSource(models.Model):
@@ -633,6 +827,13 @@ class Address(models.Model):
     house_number = models.CharField(max_length=20)
     postal_code = models.CharField(max_length=20)
     city = models.CharField(max_length=80)
+    city_ref = models.ForeignKey(
+        City,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="addresses",
+    )
     county = models.CharField(max_length=80)
     latitude = models.DecimalField(max_digits=9, decimal_places=6)
     longitude = models.DecimalField(max_digits=9, decimal_places=6)
@@ -674,3 +875,374 @@ class PasswordResetToken(models.Model):
 
     def __str__(self) -> str:
         return f"PasswordReset<{self.user.email}>"
+
+
+class Product(models.Model):
+    """Catalog item — successor to Offer for commerce flows."""
+
+    business = models.ForeignKey(
+        Business, on_delete=models.CASCADE, related_name="products"
+    )
+    category = models.ForeignKey(
+        Category,
+        on_delete=models.PROTECT,
+        related_name="products",
+    )
+    branches = models.ManyToManyField(Branch, related_name="products", blank=True)
+    name = models.CharField(max_length=160)
+    description = models.TextField(blank=True)
+    detailed_description = models.TextField(blank=True)
+    image = models.ImageField(upload_to="product_images/", null=True, blank=True)
+    base_price = models.DecimalField(max_digits=10, decimal_places=2)
+    discount_percent = models.DecimalField(
+        max_digits=5, decimal_places=2, null=True, blank=True
+    )
+    sale_price = models.DecimalField(
+        max_digits=10, decimal_places=2, null=True, blank=True
+    )
+    is_available = models.BooleanField(default=True)
+    is_enabled = models.BooleanField(default=True)
+    stock_quantity = models.PositiveIntegerField(null=True, blank=True)
+    sort_order = models.PositiveIntegerField(default=0)
+    # Link back to legacy offer when migrated.
+    source_offer = models.OneToOneField(
+        "Offer",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="migrated_product",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["sort_order", "-created_at", "-id"]
+        indexes = [
+            models.Index(fields=["business", "is_enabled", "is_available"]),
+            models.Index(fields=["category"]),
+        ]
+
+    @staticmethod
+    def compute_discount_percent(
+        base_price: Decimal, sale_price: Decimal
+    ) -> Decimal:
+        if base_price <= 0:
+            return Decimal("0.00")
+        percent = (base_price - sale_price) / base_price * Decimal("100")
+        return percent.quantize(Decimal("0.01"))
+
+    @property
+    def has_discount(self) -> bool:
+        if self.sale_price is None:
+            return False
+        return self.sale_price < self.base_price
+
+    @property
+    def effective_price(self) -> Decimal:
+        if self.has_discount and self.sale_price is not None:
+            return self.sale_price
+        return self.base_price
+
+    @property
+    def effective_discount_percent(self) -> Decimal:
+        if not self.has_discount or self.sale_price is None:
+            return Decimal("0.00")
+        if self.discount_percent is not None:
+            return self.discount_percent
+        return self.compute_discount_percent(self.base_price, self.sale_price)
+
+    def apply_percent_discount(self, percent: Decimal) -> None:
+        percent = max(Decimal("0"), min(Decimal("100"), percent)).quantize(
+            Decimal("0.01")
+        )
+        if percent <= 0:
+            self.discount_percent = None
+            self.sale_price = None
+            return
+        self.discount_percent = percent
+        factor = (Decimal("100") - percent) / Decimal("100")
+        self.sale_price = (self.base_price * factor).quantize(Decimal("0.01"))
+
+    def apply_sale_price(self, sale_price: Decimal) -> None:
+        sale_price = sale_price.quantize(Decimal("0.01"))
+        if sale_price >= self.base_price:
+            self.discount_percent = None
+            self.sale_price = None
+            return
+        self.sale_price = sale_price
+        self.discount_percent = self.compute_discount_percent(
+            self.base_price, sale_price
+        )
+
+    def __str__(self) -> str:
+        return f"{self.business.name} - {self.name}"
+
+
+class ProductGalleryImage(models.Model):
+    product = models.ForeignKey(
+        Product, on_delete=models.CASCADE, related_name="gallery_images"
+    )
+    image = models.ImageField(upload_to="product_gallery/", null=True, blank=True)
+    source_url = models.URLField(max_length=1000, blank=True)
+    sort_order = models.PositiveSmallIntegerField(default=0)
+
+    class Meta:
+        ordering = ["sort_order", "id"]
+
+    def __str__(self) -> str:
+        return f"ProductGallery<{self.product_id}:{self.id}>"
+
+
+class ProductEngagementStats(models.Model):
+    product = models.OneToOneField(
+        Product, on_delete=models.CASCADE, related_name="engagement_stats"
+    )
+    view_count = models.PositiveIntegerField(default=0)
+    like_count = models.PositiveIntegerField(default=0)
+    order_count = models.PositiveIntegerField(default=0)
+
+    def __str__(self) -> str:
+        return f"ProductStats<{self.product_id}>"
+
+
+class ProductLike(models.Model):
+    user = models.ForeignKey(
+        User, on_delete=models.CASCADE, related_name="product_likes"
+    )
+    product = models.ForeignKey(
+        Product, on_delete=models.CASCADE, related_name="likes"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["user", "product"], name="unique_product_like_per_user"
+            )
+        ]
+
+    def __str__(self) -> str:
+        return f"ProductLike<{self.user_id}:{self.product_id}>"
+
+
+class ProductViewEvent(models.Model):
+    user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name="product_view_events",
+        null=True,
+        blank=True,
+    )
+    product = models.ForeignKey(
+        Product, on_delete=models.CASCADE, related_name="view_events"
+    )
+    viewed_on = models.DateField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["user", "product", "viewed_on"],
+                condition=models.Q(user__isnull=False),
+                name="unique_product_view_per_user_day",
+            )
+        ]
+
+    def __str__(self) -> str:
+        return f"ProductView<{self.product_id}@{self.viewed_on}>"
+
+
+class Cart(models.Model):
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name="cart")
+    updated_at = models.DateTimeField(auto_now=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self) -> str:
+        return f"Cart<{self.user_id}>"
+
+
+class CartItem(models.Model):
+    cart = models.ForeignKey(Cart, on_delete=models.CASCADE, related_name="items")
+    product = models.ForeignKey(
+        Product, on_delete=models.CASCADE, related_name="cart_items"
+    )
+    branch = models.ForeignKey(
+        Branch,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="cart_items",
+    )
+    quantity = models.PositiveIntegerField(default=1)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["cart", "product", "branch"],
+                name="unique_cart_product_branch",
+            )
+        ]
+
+    def __str__(self) -> str:
+        return f"CartItem<{self.cart_id}:{self.product_id}x{self.quantity}>"
+
+
+class Order(models.Model):
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending"
+        ACCEPTED = "accepted", "Accepted"
+        CANCELLED = "cancelled", "Cancelled"
+        AWAITING_PAYMENT = "awaiting_payment", "Awaiting payment"
+        PAYMENT_SUBMITTED = "payment_submitted", "Payment submitted"
+        PAID_CONFIRMED = "paid_confirmed", "Payment confirmed"
+        PREPARING = "preparing", "Preparing"
+        READY_FOR_PICKUP = "ready_for_pickup", "Ready for pickup"
+        OUT_FOR_DELIVERY = "out_for_delivery", "Out for delivery"
+        COMPLETED = "completed", "Completed"
+
+    class FulfillmentType(models.TextChoices):
+        PICKUP = "pickup", "In-store pickup"
+        LOCAL_SAME_DAY = "local_same_day", "Local / same-day delivery"
+        NATIONWIDE = "nationwide", "Nationwide / standard delivery"
+
+    class PaymentMethod(models.TextChoices):
+        CASH_ON_PICKUP = "cash_on_pickup", "Cash on pickup"
+        CASH_ON_DELIVERY = "cash_on_delivery", "Cash on delivery"
+        BANK_TRANSFER = "bank_transfer", "Bank transfer"
+        # Reserved for later gateways
+        STRIPE = "stripe", "Stripe"
+        JAZZCASH = "jazzcash", "JazzCash"
+
+    class CancelledBy(models.TextChoices):
+        CUSTOMER = "customer", "Customer"
+        BUSINESS = "business", "Business"
+        SYSTEM = "system", "System"
+
+    public_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="orders")
+    business = models.ForeignKey(
+        Business, on_delete=models.CASCADE, related_name="orders"
+    )
+    branch = models.ForeignKey(
+        Branch, on_delete=models.PROTECT, related_name="orders"
+    )
+    status = models.CharField(
+        max_length=32, choices=Status.choices, default=Status.PENDING
+    )
+    fulfillment_type = models.CharField(
+        max_length=32, choices=FulfillmentType.choices
+    )
+    payment_method = models.CharField(
+        max_length=32, choices=PaymentMethod.choices
+    )
+    subtotal = models.DecimalField(max_digits=12, decimal_places=2)
+    delivery_fee = models.DecimalField(
+        max_digits=10, decimal_places=2, default=Decimal("0.00")
+    )
+    total = models.DecimalField(max_digits=12, decimal_places=2)
+    delivery_address_text = models.TextField(blank=True)
+    delivery_city = models.ForeignKey(
+        City,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="orders",
+    )
+    customer_notes = models.TextField(blank=True)
+    # Snapshots of cancel policy at place time
+    customer_cancel_allowed = models.BooleanField(default=True)
+    customer_cancel_until = models.DateTimeField(null=True, blank=True)
+    cancelled_by = models.CharField(
+        max_length=16, choices=CancelledBy.choices, blank=True
+    )
+    cancel_reason = models.TextField(blank=True)
+    cancelled_at = models.DateTimeField(null=True, blank=True)
+    placed_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-placed_at", "-id"]
+        indexes = [
+            models.Index(fields=["user", "-placed_at"]),
+            models.Index(fields=["business", "status"]),
+            models.Index(fields=["branch", "status"]),
+        ]
+
+    def __str__(self) -> str:
+        return f"Order<{self.public_id}>"
+
+
+class OrderItem(models.Model):
+    order = models.ForeignKey(Order, on_delete=models.CASCADE, related_name="items")
+    product = models.ForeignKey(
+        Product,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="order_items",
+    )
+    product_name = models.CharField(max_length=160)
+    unit_base_price = models.DecimalField(max_digits=10, decimal_places=2)
+    unit_sale_price = models.DecimalField(
+        max_digits=10, decimal_places=2, null=True, blank=True
+    )
+    unit_discount_percent = models.DecimalField(
+        max_digits=5, decimal_places=2, default=Decimal("0.00")
+    )
+    quantity = models.PositiveIntegerField(default=1)
+    line_total = models.DecimalField(max_digits=12, decimal_places=2)
+
+    class Meta:
+        ordering = ["id"]
+
+    def __str__(self) -> str:
+        return f"OrderItem<{self.order_id}:{self.product_name}>"
+
+
+class OrderDeliverySnapshot(models.Model):
+    order = models.OneToOneField(
+        Order, on_delete=models.CASCADE, related_name="delivery_snapshot"
+    )
+    fulfillment_type = models.CharField(max_length=32)
+    delivery_fee = models.DecimalField(max_digits=10, decimal_places=2)
+    max_delivery_hours = models.PositiveIntegerField(null=True, blank=True)
+    promised_by = models.DateTimeField(null=True, blank=True)
+    branch_city_id = models.IntegerField(null=True, blank=True)
+    branch_city_name = models.CharField(max_length=80, blank=True)
+    customer_city_id = models.IntegerField(null=True, blank=True)
+    customer_city_name = models.CharField(max_length=80, blank=True)
+    pickup_radius_km = models.DecimalField(
+        max_digits=6, decimal_places=2, null=True, blank=True
+    )
+    settings_json = models.JSONField(default=dict, blank=True)
+
+    def __str__(self) -> str:
+        return f"DeliverySnapshot<{self.order_id}>"
+
+
+class OrderPaymentProof(models.Model):
+    class ReviewStatus(models.TextChoices):
+        PENDING = "pending", "Pending review"
+        ACCEPTED = "accepted", "Accepted"
+        REJECTED = "rejected", "Rejected"
+
+    order = models.ForeignKey(
+        Order, on_delete=models.CASCADE, related_name="payment_proofs"
+    )
+    file = models.FileField(upload_to="payment_proofs/")
+    note = models.TextField(blank=True)
+    submitted_at = models.DateTimeField(auto_now_add=True)
+    review_status = models.CharField(
+        max_length=16,
+        choices=ReviewStatus.choices,
+        default=ReviewStatus.PENDING,
+    )
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    review_note = models.TextField(blank=True)
+
+    class Meta:
+        ordering = ["-submitted_at", "-id"]
+
+    def __str__(self) -> str:
+        return f"PaymentProof<{self.order_id}:{self.id}>"

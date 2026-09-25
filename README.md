@@ -13,6 +13,22 @@ python manage.py migrate
 python manage.py runserver
 ```
 
+## Commerce platform (Product / Order)
+
+Aajhee is evolving from offer/QR redemption to a **product catalog + order** marketplace.
+
+**Preferred APIs (use these for new clients):**
+- `GET /api/feeds/home` — top picks, offers/discounts, trending products
+- `GET /api/products`, `GET /api/products/<id>`
+- `GET /api/stores/branch/<id>/catalog` — discounted-first + categories + contacts
+- `GET/POST /api/cart`, checkout (`/api/checkout/preview`, `/api/checkout/place`)
+- `GET /api/orders`, payment proof, cancel
+- Business: `/api/business/products`, `/api/business/orders`, branch contacts & fulfillment
+- Admin: `/api/admin/products`, `/api/admin/orders`, `/api/admin/categories/tree`
+
+**Deprecated (kept for transition):** QR scan/redeem and primary offer discovery flows.
+Prefer Product + Order for new UI. Offer endpoints remain until clients fully cut over.
+
 ## API docs
 
 - **Production Swagger:** https://api.aajhee.com/api/docs/

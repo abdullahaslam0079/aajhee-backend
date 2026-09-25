@@ -476,7 +476,10 @@ class OfferPaymentPreviewAPIView(APIView):
 
 
 class OfferByQRAPIView(APIView):
-    """Resolve a poster QR code to offer + branch context and payment preview."""
+    """DEPRECATED: Prefer Product catalog + Order checkout.
+
+    Resolve a poster QR code to offer + branch context and payment preview.
+    """
 
     permission_classes = [permissions.AllowAny]
 
