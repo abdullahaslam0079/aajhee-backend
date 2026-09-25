@@ -657,13 +657,21 @@ class AddressSerializer(serializers.ModelSerializer):
         }
     )
     county = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        default="",
         error_messages={
-            "required": "County is required.",
             "blank": "County cannot be empty.",
-        }
+        },
     )
     isDefault = serializers.BooleanField(
         source="is_default", required=False, default=False
+    )
+    deliveryInstructions = serializers.CharField(
+        source="delivery_instructions",
+        required=False,
+        allow_blank=True,
+        default="",
     )
     formattedAddress = serializers.CharField(source="formatted_address", read_only=True)
     latitude = serializers.FloatField(
@@ -691,6 +699,7 @@ class AddressSerializer(serializers.ModelSerializer):
             "latitude",
             "longitude",
             "isDefault",
+            "deliveryInstructions",
             "formattedAddress",
         ]
 

@@ -834,10 +834,11 @@ class Address(models.Model):
         blank=True,
         related_name="addresses",
     )
-    county = models.CharField(max_length=80)
+    county = models.CharField(max_length=80, blank=True, default="")
     latitude = models.DecimalField(max_digits=9, decimal_places=6)
     longitude = models.DecimalField(max_digits=9, decimal_places=6)
     is_default = models.BooleanField(default=False)
+    delivery_instructions = models.TextField(blank=True, default="")
 
     class Meta:
         verbose_name_plural = "addresses"
