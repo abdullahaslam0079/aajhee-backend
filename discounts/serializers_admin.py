@@ -56,7 +56,6 @@ class AdminLoginTokenObtainPairSerializer(TokenObtainPairSerializer):
             raise serializers.ValidationError(
                 {"email": "This account does not have admin access."}
             )
-        data.pop("refresh", None)
         data["admin"] = AdminProfileSerializer(self.user).data
         return data
 

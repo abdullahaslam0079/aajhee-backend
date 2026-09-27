@@ -28,6 +28,9 @@ from .models import (
     OfferRedemption,
     OfferScan,
     OfferViewEvent,
+    Order,
+    OrderPaymentProof,
+    Product,
 )
 from .notification_utils import notify_favorited_business_new_offer
 from .offer_sync import sync_deal_source
@@ -185,6 +188,27 @@ class AdminAnalyticsOverviewAPIView(APIView):
             context={"request": request},
         ).data
 
+        low_stock = Product.objects.filter(
+            stock_quantity__isnull=False, stock_quantity__lte=5
+        ).count()
+        orders_total = Order.objects.count()
+        orders_pending = Order.objects.filter(status=Order.Status.PENDING).count()
+        orders_payment_submitted = Order.objects.filter(
+            status=Order.Status.PAYMENT_SUBMITTED
+        ).count()
+        pending_payment_proofs = OrderPaymentProof.objects.filter(
+            review_status=OrderPaymentProof.ReviewStatus.PENDING
+        ).count()
+        offers_pending = Offer.objects.filter(
+            review_status=Offer.ReviewStatus.PENDING
+        ).count()
+        order_volume = (
+            Order.objects.exclude(status=Order.Status.CANCELLED).aggregate(
+                total=Sum("total")
+            )["total"]
+            or 0
+        )
+
         return Response(
             {
                 "counts": {
@@ -195,6 +219,7 @@ class AdminAnalyticsOverviewAPIView(APIView):
                     "branches": Branch.objects.count(),
                     "offers_total": Offer.objects.count(),
                     "offers_active": active_offers.count(),
+                    "offers_pending": offers_pending,
                     "scans": int(scan_total),
                     "avails": int(avail_total),
                     "redemptions": OfferRedemption.objects.count(),
@@ -203,6 +228,12 @@ class AdminAnalyticsOverviewAPIView(APIView):
                     "business_views": int(business_views),
                     "business_likes": int(business_likes),
                     "users_total": User.objects.count(),
+                    "orders_total": orders_total,
+                    "orders_pending": orders_pending,
+                    "orders_payment_submitted": orders_payment_submitted,
+                    "pending_payment_proofs": pending_payment_proofs,
+                    "low_stock_products": low_stock,
+                    "order_volume": str(order_volume),
                 },
                 "top_businesses": top_businesses,
                 "recent_businesses": recent_businesses,
