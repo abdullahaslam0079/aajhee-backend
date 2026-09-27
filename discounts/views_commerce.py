@@ -1,6 +1,8 @@
 from decimal import Decimal
+from datetime import timedelta
 
-from django.db.models import Count, Prefetch, Q, Sum
+from django.db.models import Count, F, Prefetch, Q, Sum
+from django.db.models.functions import TruncDate
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import generics, status
@@ -549,12 +551,34 @@ class BusinessProductListCreateAPIView(generics.ListCreateAPIView):
     parser_classes = [MultiPartParser, FormParser, JSONParser]
 
     def get_queryset(self):
-        return (
+        qs = (
             Product.objects.filter(business=self.request.user.business_profile)
             .select_related("category", "engagement_stats")
             .prefetch_related("branches", "gallery_images")
             .order_by("sort_order", "-created_at")
         )
+        search = (self.request.query_params.get("search") or "").strip()
+        if search:
+            qs = qs.filter(
+                Q(name__icontains=search)
+                | Q(description__icontains=search)
+                | Q(category__name__icontains=search)
+            )
+        enabled = self.request.query_params.get("is_enabled")
+        if enabled in ("true", "1"):
+            qs = qs.filter(is_enabled=True)
+        elif enabled in ("false", "0"):
+            qs = qs.filter(is_enabled=False)
+        discounted = self.request.query_params.get("has_discount")
+        if discounted in ("true", "1"):
+            qs = qs.filter(sale_price__isnull=False).extra(
+                where=["sale_price < base_price"]
+            )
+        elif discounted in ("false", "0"):
+            qs = qs.filter(
+                Q(sale_price__isnull=True) | Q(sale_price__gte=F("base_price"))
+            )
+        return qs
 
     def get_serializer_context(self):
         ctx = super().get_serializer_context()
@@ -696,6 +720,7 @@ class BusinessBranchFulfillmentAPIView(APIView):
 class BusinessOrderListAPIView(generics.ListAPIView):
     permission_classes = [IsAuthenticated, IsBusinessAccount]
     serializer_class = OrderSerializer
+    pagination_class = StandardResultsSetPagination
 
     def get_queryset(self):
         qs = (
@@ -709,6 +734,23 @@ class BusinessOrderListAPIView(generics.ListAPIView):
         branch_id = self.request.query_params.get("branch_id")
         if branch_id:
             qs = qs.filter(branch_id=branch_id)
+        search = (self.request.query_params.get("search") or "").strip()
+        if search:
+            qs = qs.filter(
+                Q(public_id__icontains=search)
+                | Q(user__email__icontains=search)
+                | Q(user__phone__icontains=search)
+                | Q(user__first_name__icontains=search)
+                | Q(user__last_name__icontains=search)
+                | Q(delivery_address_text__icontains=search)
+                | Q(branch__name__icontains=search)
+            )
+        date_from = (self.request.query_params.get("date_from") or "").strip()
+        date_to = (self.request.query_params.get("date_to") or "").strip()
+        if date_from:
+            qs = qs.filter(placed_at__date__gte=date_from)
+        if date_to:
+            qs = qs.filter(placed_at__date__lte=date_to)
         return qs
 
 
@@ -834,6 +876,54 @@ class BusinessStatsAPIView(APIView):
                 ).count(),
             }
         )
+
+
+class BusinessStatsTimeseriesAPIView(APIView):
+    permission_classes = [IsAuthenticated, IsBusinessAccount]
+
+    def get(self, request):
+        business = request.user.business_profile
+        try:
+            days = min(max(int(request.query_params.get("days", 30)), 1), 90)
+        except (TypeError, ValueError):
+            days = 30
+
+        today = timezone.localdate()
+        start = today - timedelta(days=days - 1)
+        base = Order.objects.filter(business=business, placed_at__date__gte=start)
+
+        orders_by_day = {
+            row["day"]: row["count"]
+            for row in base.annotate(day=TruncDate("placed_at"))
+            .values("day")
+            .annotate(count=Count("id"))
+        }
+        completed = base.filter(status=Order.Status.COMPLETED)
+        gmv_by_day = {
+            row["day"]: row["gmv"] or Decimal("0.00")
+            for row in completed.annotate(day=TruncDate("placed_at"))
+            .values("day")
+            .annotate(gmv=Sum("total"))
+        }
+        completed_by_day = {
+            row["day"]: row["count"]
+            for row in completed.annotate(day=TruncDate("placed_at"))
+            .values("day")
+            .annotate(count=Count("id"))
+        }
+
+        series = []
+        for offset in range(days):
+            day = start + timedelta(days=offset)
+            series.append(
+                {
+                    "date": day.isoformat(),
+                    "orders": int(orders_by_day.get(day, 0)),
+                    "completed": int(completed_by_day.get(day, 0)),
+                    "gmv": str(gmv_by_day.get(day, Decimal("0.00"))),
+                }
+            )
+        return Response({"days": days, "series": series})
 
 
 # ---- Business notifications ----

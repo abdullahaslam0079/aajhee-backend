@@ -88,6 +88,7 @@ from .views_commerce import (
     BusinessProductDiscountAPIView,
     BusinessProductListCreateAPIView,
     BusinessStatsAPIView,
+    BusinessStatsTimeseriesAPIView,
     BusinessNotificationListAPIView,
     BusinessNotificationUnreadCountAPIView,
     BusinessNotificationMarkReadAPIView,
@@ -312,6 +313,11 @@ urlpatterns = [
         name="business-presence",
     ),
     path("business/stats", BusinessStatsAPIView.as_view(), name="business-stats"),
+    path(
+        "business/stats/timeseries",
+        BusinessStatsTimeseriesAPIView.as_view(),
+        name="business-stats-timeseries",
+    ),
     path(
         "business/products",
         BusinessProductListCreateAPIView.as_view(),

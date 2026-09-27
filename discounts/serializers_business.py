@@ -223,7 +223,6 @@ class BusinessLoginTokenObtainPairSerializer(TokenObtainPairSerializer):
             raise serializers.ValidationError(
                 {"email": "Business profile not found for this account."}
             )
-        data.pop("refresh", None)
         data["business"] = BusinessProfileSerializer(
             self.user.business_profile, context=self.context
         ).data
