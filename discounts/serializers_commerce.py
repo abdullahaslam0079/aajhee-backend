@@ -176,6 +176,7 @@ class ProductSerializer(serializers.ModelSerializer):
     view_count = serializers.SerializerMethodField()
     like_count = serializers.SerializerMethodField()
     order_count = serializers.SerializerMethodField()
+    is_low_stock = serializers.SerializerMethodField()
 
     class Meta:
         model = Product
@@ -202,6 +203,7 @@ class ProductSerializer(serializers.ModelSerializer):
             "is_available",
             "is_enabled",
             "stock_quantity",
+            "is_low_stock",
             "sort_order",
             "view_count",
             "like_count",
@@ -215,6 +217,7 @@ class ProductSerializer(serializers.ModelSerializer):
             "has_discount",
             "effective_price",
             "effective_discount_percent",
+            "is_low_stock",
         ]
 
     def get_image_url(self, obj: Product) -> str | None:
@@ -251,13 +254,31 @@ class ProductSerializer(serializers.ModelSerializer):
             )
         return attrs
 
-    def _set_gallery(self, product: Product, images: list | None):
+    LOW_STOCK_THRESHOLD = 5
+
+    def get_is_low_stock(self, obj: Product) -> bool:
+        if obj.stock_quantity is None:
+            return False
+        return obj.stock_quantity <= self.LOW_STOCK_THRESHOLD
+
+    def _set_gallery(
+        self, product: Product, images: list | None, *, replace: bool = False
+    ):
         if images is None:
             return
-        product.gallery_images.all().delete()
+        if replace:
+            product.gallery_images.all().delete()
+            start = 0
+        else:
+            last = (
+                product.gallery_images.order_by("-sort_order", "-id")
+                .values_list("sort_order", flat=True)
+                .first()
+            )
+            start = (last + 1) if last is not None else 0
         for index, image in enumerate(images):
             ProductGalleryImage.objects.create(
-                product=product, image=image, sort_order=index
+                product=product, image=image, sort_order=start + index
             )
 
     def create(self, validated_data):
@@ -267,7 +288,7 @@ class ProductSerializer(serializers.ModelSerializer):
         product = Product.objects.create(business=business, **validated_data)
         if branches:
             product.branches.set(branches)
-        self._set_gallery(product, images)
+        self._set_gallery(product, images, replace=True)
         if product.sale_price is not None:
             apply_sale_price(product, product.sale_price)
         elif product.discount_percent is not None:
@@ -282,7 +303,8 @@ class ProductSerializer(serializers.ModelSerializer):
         instance.save()
         if branches is not None:
             instance.branches.set(branches)
-        self._set_gallery(instance, images)
+        # Append new gallery photos; delete/reorder use dedicated endpoints.
+        self._set_gallery(instance, images, replace=False)
         if "sale_price" in validated_data and validated_data["sale_price"] is not None:
             apply_sale_price(instance, validated_data["sale_price"])
         elif (
@@ -312,12 +334,20 @@ class AdminProductSerializer(ProductSerializer):
         product = Product.objects.create(**validated_data)
         if branches:
             product.branches.set(branches)
-        self._set_gallery(product, images)
+        self._set_gallery(product, images, replace=True)
         if product.sale_price is not None:
             apply_sale_price(product, product.sale_price)
         elif product.discount_percent is not None:
             apply_discount_percent(product, product.discount_percent)
         return product
+
+
+class ProductGalleryReorderSerializer(serializers.Serializer):
+    image_ids = serializers.ListField(
+        child=serializers.IntegerField(),
+        allow_empty=False,
+        help_text="Gallery image IDs in the desired order.",
+    )
 
 
 class ProductDiscountSerializer(serializers.Serializer):

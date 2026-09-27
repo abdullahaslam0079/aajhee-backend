@@ -26,6 +26,7 @@ from .models import (
     OrderPaymentProof,
     Product,
     ProductEngagementStats,
+    ProductGalleryImage,
     ProductLike,
     ProductViewEvent,
 )
@@ -59,6 +60,7 @@ from .serializers_commerce import (
     PaymentProofReviewSerializer,
     PaymentProofUploadSerializer,
     ProductDiscountSerializer,
+    ProductGalleryReorderSerializer,
     ProductSerializer,
     serialize_delivery_options,
 )
@@ -578,6 +580,12 @@ class BusinessProductListCreateAPIView(generics.ListCreateAPIView):
             qs = qs.filter(
                 Q(sale_price__isnull=True) | Q(sale_price__gte=F("base_price"))
             )
+        low_stock = self.request.query_params.get("low_stock")
+        if low_stock in ("true", "1"):
+            qs = qs.filter(
+                stock_quantity__isnull=False,
+                stock_quantity__lte=ProductSerializer.LOW_STOCK_THRESHOLD,
+            )
         return qs
 
     def get_serializer_context(self):
@@ -602,6 +610,52 @@ class BusinessProductDetailAPIView(generics.RetrieveUpdateDestroyAPIView):
         ctx = super().get_serializer_context()
         ctx["business"] = self.request.user.business_profile
         return ctx
+
+
+class BusinessProductGalleryDeleteAPIView(APIView):
+    permission_classes = [IsAuthenticated, IsBusinessAccount]
+
+    def delete(self, request, product_id: int, image_id: int):
+        product = get_object_or_404(
+            Product, pk=product_id, business=request.user.business_profile
+        )
+        image = get_object_or_404(ProductGalleryImage, pk=image_id, product=product)
+        image.delete()
+        return Response(
+            ProductSerializer(product, context={"request": request}).data
+        )
+
+
+class BusinessProductGalleryReorderAPIView(APIView):
+    permission_classes = [IsAuthenticated, IsBusinessAccount]
+
+    def post(self, request, product_id: int):
+        product = get_object_or_404(
+            Product, pk=product_id, business=request.user.business_profile
+        )
+        serializer = ProductGalleryReorderSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        image_ids = serializer.validated_data["image_ids"]
+        existing = {
+            img.id: img
+            for img in ProductGalleryImage.objects.filter(product=product)
+        }
+        if set(image_ids) != set(existing.keys()):
+            return Response(
+                {
+                    "message": "image_ids must include every gallery image exactly once."
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        for index, image_id in enumerate(image_ids):
+            img = existing[image_id]
+            if img.sort_order != index:
+                img.sort_order = index
+                img.save(update_fields=["sort_order"])
+        product.refresh_from_db()
+        return Response(
+            ProductSerializer(product, context={"request": request}).data
+        )
 
 
 class BusinessProductDiscountAPIView(APIView):
@@ -874,6 +928,12 @@ class BusinessStatsAPIView(APIView):
                 "active_product_count": Product.objects.filter(
                     business=business, is_enabled=True, is_available=True
                 ).count(),
+                "low_stock_count": Product.objects.filter(
+                    business=business,
+                    stock_quantity__isnull=False,
+                    stock_quantity__lte=ProductSerializer.LOW_STOCK_THRESHOLD,
+                ).count(),
+                "low_stock_threshold": ProductSerializer.LOW_STOCK_THRESHOLD,
             }
         )
 

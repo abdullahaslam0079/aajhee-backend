@@ -86,6 +86,8 @@ from .views_commerce import (
     BusinessPresenceAPIView,
     BusinessProductDetailAPIView,
     BusinessProductDiscountAPIView,
+    BusinessProductGalleryDeleteAPIView,
+    BusinessProductGalleryReorderAPIView,
     BusinessProductListCreateAPIView,
     BusinessStatsAPIView,
     BusinessStatsTimeseriesAPIView,
@@ -337,6 +339,16 @@ urlpatterns = [
         "business/products/<int:product_id>/discount",
         BusinessProductDiscountAPIView.as_view(),
         name="business-product-discount",
+    ),
+    path(
+        "business/products/<int:product_id>/gallery/reorder",
+        BusinessProductGalleryReorderAPIView.as_view(),
+        name="business-product-gallery-reorder",
+    ),
+    path(
+        "business/products/<int:product_id>/gallery/<int:image_id>",
+        BusinessProductGalleryDeleteAPIView.as_view(),
+        name="business-product-gallery-delete",
     ),
     path(
         "business/orders",
