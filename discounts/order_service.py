@@ -42,6 +42,20 @@ def _line_total(product: Product, quantity: int) -> Decimal:
     return (product.effective_price * quantity).quantize(Decimal("0.01"))
 
 
+PAYMENT_PROOF_METHODS = frozenset(
+    {
+        Order.PaymentMethod.BANK_TRANSFER,
+        Order.PaymentMethod.STRIPE,
+        Order.PaymentMethod.JAZZCASH,
+    }
+)
+
+
+def requires_payment_proof(payment_method: str | None) -> bool:
+    """True when the customer must upload a transaction screenshot after accept."""
+    return payment_method in PAYMENT_PROOF_METHODS
+
+
 def add_or_update_cart_item(
     cart: Cart,
     product: Product,
@@ -144,8 +158,12 @@ def place_orders_from_cart(
         elif payment_method == Order.PaymentMethod.BANK_TRANSFER:
             if not settings.bank_transfer_enabled:
                 raise ValidationError({"payment_method": "Bank transfer is not enabled."})
-        elif payment_method in (Order.PaymentMethod.STRIPE, Order.PaymentMethod.JAZZCASH):
-            raise ValidationError({"payment_method": "Online gateway payments are not available yet."})
+        elif payment_method == Order.PaymentMethod.STRIPE:
+            if not settings.stripe_enabled:
+                raise ValidationError({"payment_method": "Card / Stripe payment is not enabled."})
+        elif payment_method == Order.PaymentMethod.JAZZCASH:
+            if not settings.jazzcash_enabled:
+                raise ValidationError({"payment_method": "JazzCash is not enabled."})
 
         lines: list[CartItem] = []
         for item_id in item_ids:
@@ -181,10 +199,8 @@ def place_orders_from_cart(
         if location and location.city:
             delivery_city = get_or_create_city(location.city)
 
+        # Proof methods stay pending until business accepts, then awaiting_payment.
         initial_status = Order.Status.PENDING
-        if payment_method == Order.PaymentMethod.BANK_TRANSFER:
-            # Stay pending until business accepts, then awaiting_payment.
-            initial_status = Order.Status.PENDING
 
         order = Order.objects.create(
             user=user,
@@ -240,6 +256,8 @@ def place_orders_from_cart(
                 "customer_cancel_policy": settings.customer_cancel_policy,
                 "customer_cancel_window_minutes": settings.customer_cancel_window_minutes,
                 "bank_transfer_enabled": settings.bank_transfer_enabled,
+                "stripe_enabled": settings.stripe_enabled,
+                "jazzcash_enabled": settings.jazzcash_enabled,
             },
         )
         orders.append(order)
@@ -342,11 +360,11 @@ def allowed_business_transitions(order: Order) -> set[str]:
             allowed.discard(Order.Status.READY_FOR_PICKUP)
 
     if order.status == Order.Status.ACCEPTED:
-        if order.payment_method == Order.PaymentMethod.BANK_TRANSFER:
-            # Must collect payment before preparing
+        if requires_payment_proof(order.payment_method):
+            # Must collect payment proof before preparing
             allowed.discard(Order.Status.PREPARING)
         else:
-            # Cash / card — do not show "request bank transfer"
+            # Cash — do not show "awaiting payment"
             allowed.discard(Order.Status.AWAITING_PAYMENT)
 
     # Customers mark payment_submitted by uploading proof; merchants should not
@@ -366,14 +384,14 @@ def transition_order_status(order: Order, new_status: str, *, payment_method: st
             {"status": f"Cannot transition from {order.status} to {new_status}."}
         )
 
-    # Auto-route after accept for bank transfer vs cash
+    # Auto-route after accept for proof methods vs cash
     if (
         order.status == Order.Status.ACCEPTED
         and new_status == Order.Status.PREPARING
-        and order.payment_method == Order.PaymentMethod.BANK_TRANSFER
+        and requires_payment_proof(order.payment_method)
     ):
         raise ValidationError(
-            {"status": "Confirm payment before preparing a bank-transfer order."}
+            {"status": "Confirm payment before preparing this order."}
         )
 
     if order.status == Order.Status.PENDING and new_status == Order.Status.ACCEPTED:
@@ -383,7 +401,7 @@ def transition_order_status(order: Order, new_status: str, *, payment_method: st
         order.save(
             update_fields=["status", "customer_cancel_allowed", "updated_at"]
         )
-        if order.payment_method == Order.PaymentMethod.BANK_TRANSFER:
+        if requires_payment_proof(order.payment_method):
             order.status = Order.Status.AWAITING_PAYMENT
             order.save(update_fields=["status", "updated_at"])
         return order

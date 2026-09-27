@@ -441,6 +441,10 @@ class CheckoutPreviewAPIView(UserLocationContextMixin, APIView):
                     "cash_on_delivery": settings.cash_on_delivery_enabled,
                     "bank_transfer": settings.bank_transfer_enabled,
                     "bank_transfer_instructions": settings.bank_transfer_instructions,
+                    "stripe": settings.stripe_enabled,
+                    "stripe_instructions": settings.stripe_instructions,
+                    "jazzcash": settings.jazzcash_enabled,
+                    "jazzcash_instructions": settings.jazzcash_instructions,
                 },
             }
         )
@@ -511,10 +515,12 @@ class ConsumerPaymentProofAPIView(APIView):
     parser_classes = [MultiPartParser, FormParser]
 
     def post(self, request, public_id):
+        from .order_service import requires_payment_proof
+
         order = get_object_or_404(Order, public_id=public_id, user=request.user)
-        if order.payment_method != Order.PaymentMethod.BANK_TRANSFER:
+        if not requires_payment_proof(order.payment_method):
             return Response(
-                {"detail": "Payment proof only applies to bank transfer orders."},
+                {"detail": "Payment proof only applies to bank transfer, card, or JazzCash orders."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
         if order.status not in (

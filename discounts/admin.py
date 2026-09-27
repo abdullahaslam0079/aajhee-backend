@@ -377,4 +377,6 @@ class BranchFulfillmentSettingsAdmin(admin.ModelAdmin):
         "local_same_day_enabled",
         "nationwide_enabled",
         "bank_transfer_enabled",
+        "stripe_enabled",
+        "jazzcash_enabled",
     )

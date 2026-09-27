@@ -796,7 +796,7 @@ class UserFavoritesAPIView(UserLocationContextMixin, APIView):
 
 
 class UserProfileAPIView(APIView):
-    """Read / update the authenticated consumer's profile (name only)."""
+    """Read / update / delete the authenticated consumer's profile."""
 
     permission_classes = [permissions.IsAuthenticated, IsConsumerAccount]
 
@@ -809,6 +809,35 @@ class UserProfileAPIView(APIView):
 
     def patch(self, request):
         return self._update(request, partial=True)
+
+    def delete(self, request):
+        """Soft-delete the consumer account (App Store account-deletion requirement)."""
+        user = request.user
+        uid = user.pk
+        # Free unique fields so the same phone/email/Firebase UID can re-register.
+        user.is_active = False
+        user.email = f"deleted_{uid}@deleted.aajhee.invalid"
+        user.phone = None
+        user.firebase_uid = None
+        user.first_name = ""
+        user.last_name = ""
+        user.set_unusable_password()
+        user.save(
+            update_fields=[
+                "is_active",
+                "email",
+                "phone",
+                "firebase_uid",
+                "first_name",
+                "last_name",
+                "password",
+            ]
+        )
+        DeviceToken.objects.filter(user_id=uid).delete()
+        return Response(
+            {"message": "Account deleted successfully."},
+            status=status.HTTP_200_OK,
+        )
 
     def _update(self, request, *, partial: bool):
         serializer = ConsumerProfileSerializer(

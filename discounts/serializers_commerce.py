@@ -124,6 +124,10 @@ class BranchFulfillmentSettingsSerializer(serializers.ModelSerializer):
             "customer_cancel_window_minutes",
             "bank_transfer_enabled",
             "bank_transfer_instructions",
+            "stripe_enabled",
+            "stripe_instructions",
+            "jazzcash_enabled",
+            "jazzcash_instructions",
             "cash_on_pickup_enabled",
             "cash_on_delivery_enabled",
             "updated_at",
@@ -510,6 +514,7 @@ class OrderSerializer(serializers.ModelSerializer):
     )
     can_customer_cancel = serializers.SerializerMethodField()
     bank_transfer_instructions = serializers.SerializerMethodField()
+    payment_instructions = serializers.SerializerMethodField()
 
     class Meta:
         model = Order
@@ -543,6 +548,7 @@ class OrderSerializer(serializers.ModelSerializer):
             "delivery_snapshot",
             "payment_proofs",
             "bank_transfer_instructions",
+            "payment_instructions",
         ]
 
     def get_customer_name(self, obj: Order) -> str:
@@ -557,11 +563,28 @@ class OrderSerializer(serializers.ModelSerializer):
 
         return customer_can_cancel(obj)
 
-    def get_bank_transfer_instructions(self, obj: Order) -> str:
-        if obj.payment_method != Order.PaymentMethod.BANK_TRANSFER:
+    def _payment_instructions_for(self, obj: Order) -> str:
+        from .order_service import requires_payment_proof
+
+        if not requires_payment_proof(obj.payment_method):
             return ""
         settings = get_or_create_fulfillment_settings(obj.branch)
-        return settings.bank_transfer_instructions
+        if obj.payment_method == Order.PaymentMethod.BANK_TRANSFER:
+            return settings.bank_transfer_instructions
+        if obj.payment_method == Order.PaymentMethod.STRIPE:
+            return settings.stripe_instructions
+        if obj.payment_method == Order.PaymentMethod.JAZZCASH:
+            return settings.jazzcash_instructions
+        return ""
+
+    def get_bank_transfer_instructions(self, obj: Order) -> str:
+        # Kept for backwards compatibility with existing clients.
+        if obj.payment_method != Order.PaymentMethod.BANK_TRANSFER:
+            return ""
+        return self._payment_instructions_for(obj)
+
+    def get_payment_instructions(self, obj: Order) -> str:
+        return self._payment_instructions_for(obj)
 
 
 class CheckoutGroupSerializer(serializers.Serializer):
