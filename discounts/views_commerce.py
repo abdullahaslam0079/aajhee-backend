@@ -1096,7 +1096,95 @@ class AdminOrderListAPIView(generics.ListAPIView):
     pagination_class = StandardResultsSetPagination
 
     def get_queryset(self):
-        return Order.objects.select_related("business", "branch", "user").all()
+        qs = (
+            Order.objects.select_related("business", "branch", "user")
+            .prefetch_related("items", "payment_proofs", "delivery_snapshot")
+            .order_by("-placed_at")
+        )
+        status_filter = self.request.query_params.get("status")
+        if status_filter:
+            qs = qs.filter(status=status_filter)
+        business_id = self.request.query_params.get("business_id")
+        if business_id:
+            qs = qs.filter(business_id=business_id)
+        branch_id = self.request.query_params.get("branch_id")
+        if branch_id:
+            qs = qs.filter(branch_id=branch_id)
+        search = (self.request.query_params.get("search") or "").strip()
+        if search:
+            qs = qs.filter(
+                Q(public_id__icontains=search)
+                | Q(business__name__icontains=search)
+                | Q(branch__name__icontains=search)
+                | Q(user__email__icontains=search)
+                | Q(user__phone__icontains=search)
+                | Q(user__first_name__icontains=search)
+                | Q(user__last_name__icontains=search)
+                | Q(delivery_address_text__icontains=search)
+            )
+        date_from = (self.request.query_params.get("date_from") or "").strip()
+        date_to = (self.request.query_params.get("date_to") or "").strip()
+        if date_from:
+            qs = qs.filter(placed_at__date__gte=date_from)
+        if date_to:
+            qs = qs.filter(placed_at__date__lte=date_to)
+        return qs
+
+
+class AdminOrderDetailAPIView(generics.RetrieveAPIView):
+    permission_classes = [IsAuthenticated, IsAdminAccount]
+    serializer_class = OrderSerializer
+    lookup_field = "public_id"
+    lookup_url_kwarg = "public_id"
+
+    def get_queryset(self):
+        return (
+            Order.objects.select_related("business", "branch", "user")
+            .prefetch_related("items", "payment_proofs", "delivery_snapshot")
+        )
+
+
+class AdminOrderStatusAPIView(APIView):
+    permission_classes = [IsAuthenticated, IsAdminAccount]
+
+    def post(self, request, public_id):
+        order = get_object_or_404(Order, public_id=public_id)
+        serializer = OrderStatusUpdateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        if serializer.validated_data["status"] == Order.Status.CANCELLED:
+            cancel_order(
+                order,
+                by=Order.CancelledBy.BUSINESS,
+                reason=serializer.validated_data.get("reason") or "",
+            )
+        else:
+            transition_order_status(order, serializer.validated_data["status"])
+        return Response(OrderSerializer(order, context={"request": request}).data)
+
+
+class AdminPaymentProofReviewAPIView(APIView):
+    permission_classes = [IsAuthenticated, IsAdminAccount]
+
+    def post(self, request, public_id, proof_id: int):
+        order = get_object_or_404(Order, public_id=public_id)
+        proof = get_object_or_404(OrderPaymentProof, pk=proof_id, order=order)
+        serializer = PaymentProofReviewSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        proof.review_status = serializer.validated_data["review_status"]
+        proof.review_note = serializer.validated_data.get("review_note") or ""
+        proof.reviewed_at = timezone.now()
+        proof.save(
+            update_fields=["review_status", "review_note", "reviewed_at"]
+        )
+        if proof.review_status == OrderPaymentProof.ReviewStatus.ACCEPTED:
+            order.status = Order.Status.PAID_CONFIRMED
+            order.save(update_fields=["status", "updated_at"])
+        elif proof.review_status == OrderPaymentProof.ReviewStatus.REJECTED:
+            order.status = Order.Status.AWAITING_PAYMENT
+            order.save(update_fields=["status", "updated_at"])
+        return Response(
+            OrderPaymentProofSerializer(proof, context={"request": request}).data
+        )
 
 
 class AdminProductListCreateAPIView(generics.ListCreateAPIView):
@@ -1117,6 +1205,17 @@ class AdminProductListCreateAPIView(generics.ListCreateAPIView):
         search = (self.request.query_params.get("search") or "").strip()
         if search:
             qs = qs.filter(Q(name__icontains=search) | Q(business__name__icontains=search))
+        low_stock = self.request.query_params.get("low_stock")
+        if low_stock in ("true", "1"):
+            qs = qs.filter(
+                stock_quantity__isnull=False,
+                stock_quantity__lte=ProductSerializer.LOW_STOCK_THRESHOLD,
+            )
+        enabled = self.request.query_params.get("is_enabled")
+        if enabled in ("true", "1"):
+            qs = qs.filter(is_enabled=True)
+        elif enabled in ("false", "0"):
+            qs = qs.filter(is_enabled=False)
         return qs
 
 
@@ -1130,6 +1229,64 @@ class AdminProductDetailAPIView(generics.RetrieveUpdateDestroyAPIView):
         return Product.objects.select_related("business", "category").prefetch_related(
             "branches", "gallery_images"
         )
+
+
+class AdminProductGalleryDeleteAPIView(APIView):
+    permission_classes = [IsAuthenticated, IsAdminAccount]
+
+    def delete(self, request, product_id: int, image_id: int):
+        product = get_object_or_404(Product, pk=product_id)
+        image = get_object_or_404(ProductGalleryImage, pk=image_id, product=product)
+        image.delete()
+        return Response(
+            AdminProductSerializer(product, context={"request": request}).data
+        )
+
+
+class AdminProductGalleryReorderAPIView(APIView):
+    permission_classes = [IsAuthenticated, IsAdminAccount]
+
+    def post(self, request, product_id: int):
+        product = get_object_or_404(Product, pk=product_id)
+        serializer = ProductGalleryReorderSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        image_ids = serializer.validated_data["image_ids"]
+        existing = {
+            img.id: img
+            for img in ProductGalleryImage.objects.filter(product=product)
+        }
+        if set(image_ids) != set(existing.keys()):
+            return Response(
+                {
+                    "message": "image_ids must include every gallery image exactly once."
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        for index, image_id in enumerate(image_ids):
+            img = existing[image_id]
+            if img.sort_order != index:
+                img.sort_order = index
+                img.save(update_fields=["sort_order"])
+        product.refresh_from_db()
+        return Response(
+            AdminProductSerializer(product, context={"request": request}).data
+        )
+
+
+class AdminBulkDiscountAPIView(APIView):
+    permission_classes = [IsAuthenticated, IsAdminAccount]
+
+    def post(self, request):
+        serializer = BulkDiscountSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        qs = Product.objects.all()
+        business_id = request.data.get("business_id")
+        if business_id:
+            qs = qs.filter(business_id=business_id)
+        if not serializer.validated_data.get("all_products"):
+            qs = qs.filter(id__in=serializer.validated_data["product_ids"])
+        count = bulk_apply_percent(qs, serializer.validated_data["discount_percent"])
+        return Response({"updated": count})
 
 
 class EnsureGeoSeedAPIView(APIView):
