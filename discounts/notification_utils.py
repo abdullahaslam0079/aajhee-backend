@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 
 from .fcm import send_fcm_to_tokens
-from .models import BusinessLike, DeviceToken, Notification, Offer, UserPreferences
+from .models import BusinessLike, DeviceToken, Notification, Offer, Order, UserPreferences
 
 logger = logging.getLogger(__name__)
 
@@ -99,3 +99,57 @@ def notify_favorited_business_new_offer(offer: Offer) -> int:
                 "Failed to notify user %s about offer %s", user_id, offer.id
             )
     return created
+
+
+def notify_business_new_order(order: Order) -> Notification | None:
+    """Notify the business owner that a customer placed an order."""
+    owner_id = getattr(order.business, "owner_id", None)
+    if not owner_id:
+        return None
+    try:
+        return create_and_push_notification(
+            user_id=owner_id,
+            type=Notification.NotificationType.BUSINESS_NEW_ORDER,
+            title="New order",
+            body=(
+                f"{order.branch.name}: Rs {order.total} · "
+                f"{order.get_fulfillment_type_display()} · "
+                f"{order.get_payment_method_display()}"
+            ),
+            data={
+                "type": Notification.NotificationType.BUSINESS_NEW_ORDER,
+                "order_public_id": str(order.public_id),
+                "business_id": order.business_id,
+                "branch_id": order.branch_id,
+                "route": f"/business/orders/{order.public_id}",
+            },
+        )
+    except Exception:
+        logger.exception("Failed to notify business about order %s", order.public_id)
+        return None
+
+
+def notify_business_payment_proof(order: Order) -> Notification | None:
+    """Notify the business owner that a payment proof was uploaded."""
+    owner_id = getattr(order.business, "owner_id", None)
+    if not owner_id:
+        return None
+    try:
+        return create_and_push_notification(
+            user_id=owner_id,
+            type=Notification.NotificationType.BUSINESS_PAYMENT_PROOF,
+            title="Payment proof submitted",
+            body=f"Order #{str(order.public_id)[:8]} · Rs {order.total} — review the receipt",
+            data={
+                "type": Notification.NotificationType.BUSINESS_PAYMENT_PROOF,
+                "order_public_id": str(order.public_id),
+                "business_id": order.business_id,
+                "branch_id": order.branch_id,
+                "route": f"/business/orders/{order.public_id}",
+            },
+        )
+    except Exception:
+        logger.exception(
+            "Failed to notify business about payment proof for %s", order.public_id
+        )
+        return None

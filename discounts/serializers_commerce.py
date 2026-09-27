@@ -471,6 +471,13 @@ class OrderSerializer(serializers.ModelSerializer):
     payment_proofs = OrderPaymentProofSerializer(many=True, read_only=True)
     business_name = serializers.CharField(source="business.name", read_only=True)
     branch_name = serializers.CharField(source="branch.name", read_only=True)
+    customer_name = serializers.SerializerMethodField()
+    customer_phone = serializers.CharField(
+        source="user.phone", read_only=True, allow_null=True
+    )
+    customer_email = serializers.EmailField(
+        source="user.email", read_only=True, allow_null=True
+    )
     can_customer_cancel = serializers.SerializerMethodField()
     bank_transfer_instructions = serializers.SerializerMethodField()
 
@@ -491,6 +498,9 @@ class OrderSerializer(serializers.ModelSerializer):
             "total",
             "delivery_address_text",
             "customer_notes",
+            "customer_name",
+            "customer_phone",
+            "customer_email",
             "customer_cancel_allowed",
             "customer_cancel_until",
             "can_customer_cancel",
@@ -504,6 +514,13 @@ class OrderSerializer(serializers.ModelSerializer):
             "payment_proofs",
             "bank_transfer_instructions",
         ]
+
+    def get_customer_name(self, obj: Order) -> str:
+        user = obj.user
+        if not user:
+            return ""
+        full = f"{user.first_name or ''} {user.last_name or ''}".strip()
+        return full or user.email or user.phone or ""
 
     def get_can_customer_cancel(self, obj: Order) -> bool:
         from .order_service import customer_can_cancel

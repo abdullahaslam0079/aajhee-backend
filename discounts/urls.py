@@ -88,6 +88,10 @@ from .views_commerce import (
     BusinessProductDiscountAPIView,
     BusinessProductListCreateAPIView,
     BusinessStatsAPIView,
+    BusinessNotificationListAPIView,
+    BusinessNotificationUnreadCountAPIView,
+    BusinessNotificationMarkReadAPIView,
+    BusinessNotificationMarkAllReadAPIView,
     CartAPIView,
     CartItemDetailAPIView,
     CartItemListCreateAPIView,
@@ -347,6 +351,26 @@ urlpatterns = [
         "business/orders/<uuid:public_id>/payment-proofs/<int:proof_id>/review",
         BusinessPaymentProofReviewAPIView.as_view(),
         name="business-payment-proof-review",
+    ),
+    path(
+        "business/notifications",
+        BusinessNotificationListAPIView.as_view(),
+        name="business-notifications",
+    ),
+    path(
+        "business/notifications/unread-count",
+        BusinessNotificationUnreadCountAPIView.as_view(),
+        name="business-notifications-unread-count",
+    ),
+    path(
+        "business/notifications/read-all",
+        BusinessNotificationMarkAllReadAPIView.as_view(),
+        name="business-notifications-read-all",
+    ),
+    path(
+        "business/notifications/<int:notification_id>/read",
+        BusinessNotificationMarkReadAPIView.as_view(),
+        name="business-notification-read",
     ),
     path(
         "business/branches",

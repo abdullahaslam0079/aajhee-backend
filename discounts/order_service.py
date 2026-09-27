@@ -250,11 +250,12 @@ def place_orders_from_cart(
 
 
 def customer_can_cancel(order: Order) -> bool:
-    if order.status in (
-        Order.Status.CANCELLED,
-        Order.Status.COMPLETED,
-        Order.Status.OUT_FOR_DELIVERY,
-    ):
+    """Customers may cancel only while the order is still pending.
+
+    Once the merchant accepts (or the order moves further, e.g. ready for
+    pickup / out for delivery), cancellation is merchant-only.
+    """
+    if order.status != Order.Status.PENDING:
         return False
     if not order.customer_cancel_allowed:
         return False
@@ -267,7 +268,14 @@ def cancel_order(order: Order, *, by: str, reason: str = "") -> Order:
     if order.status in (Order.Status.CANCELLED, Order.Status.COMPLETED):
         raise ValidationError({"status": "Order cannot be cancelled."})
     if by == Order.CancelledBy.CUSTOMER and not customer_can_cancel(order):
-        raise ValidationError({"status": "Cancel window has expired or is disabled."})
+        raise ValidationError(
+            {
+                "status": (
+                    "You can only cancel while the order is pending. "
+                    "Once the shop accepts it, contact the shop instead."
+                )
+            }
+        )
     order.status = Order.Status.CANCELLED
     order.cancelled_by = by
     order.cancel_reason = reason
@@ -311,11 +319,48 @@ BUSINESS_STATUS_TRANSITIONS: dict[str, set[str]] = {
 }
 
 
+def is_pickup_order(order: Order) -> bool:
+    return order.fulfillment_type == Order.FulfillmentType.PICKUP
+
+
+def is_delivery_order(order: Order) -> bool:
+    return order.fulfillment_type in (
+        Order.FulfillmentType.LOCAL_SAME_DAY,
+        Order.FulfillmentType.NATIONWIDE,
+    )
+
+
+def allowed_business_transitions(order: Order) -> set[str]:
+    """Status targets a merchant may apply, filtered by fulfillment + payment."""
+    allowed = set(BUSINESS_STATUS_TRANSITIONS.get(order.status, set()))
+
+    if order.status == Order.Status.PREPARING:
+        if is_pickup_order(order):
+            allowed.discard(Order.Status.OUT_FOR_DELIVERY)
+        else:
+            # Local / nationwide delivery — never "ready for pickup"
+            allowed.discard(Order.Status.READY_FOR_PICKUP)
+
+    if order.status == Order.Status.ACCEPTED:
+        if order.payment_method == Order.PaymentMethod.BANK_TRANSFER:
+            # Must collect payment before preparing
+            allowed.discard(Order.Status.PREPARING)
+        else:
+            # Cash / card — do not show "request bank transfer"
+            allowed.discard(Order.Status.AWAITING_PAYMENT)
+
+    # Customers mark payment_submitted by uploading proof; merchants should not
+    if order.status == Order.Status.AWAITING_PAYMENT:
+        allowed.discard(Order.Status.PAYMENT_SUBMITTED)
+
+    return allowed
+
+
 def transition_order_status(order: Order, new_status: str, *, payment_method: str | None = None) -> Order:
-    allowed = BUSINESS_STATUS_TRANSITIONS.get(order.status, set())
     if new_status == Order.Status.CANCELLED:
         return cancel_order(order, by=Order.CancelledBy.BUSINESS)
 
+    allowed = allowed_business_transitions(order)
     if new_status not in allowed:
         raise ValidationError(
             {"status": f"Cannot transition from {order.status} to {new_status}."}
@@ -333,7 +378,11 @@ def transition_order_status(order: Order, new_status: str, *, payment_method: st
 
     if order.status == Order.Status.PENDING and new_status == Order.Status.ACCEPTED:
         order.status = Order.Status.ACCEPTED
-        order.save(update_fields=["status", "updated_at"])
+        # Merchant acceptance ends the customer cancel window
+        order.customer_cancel_allowed = False
+        order.save(
+            update_fields=["status", "customer_cancel_allowed", "updated_at"]
+        )
         if order.payment_method == Order.PaymentMethod.BANK_TRANSFER:
             order.status = Order.Status.AWAITING_PAYMENT
             order.save(update_fields=["status", "updated_at"])

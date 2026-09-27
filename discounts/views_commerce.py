@@ -455,6 +455,10 @@ class CheckoutPlaceAPIView(UserLocationContextMixin, APIView):
             groups=serializer.validated_data["groups"],
             location=self.get_user_location(),
         )
+        from .notification_utils import notify_business_new_order
+
+        for order in orders:
+            notify_business_new_order(order)
         return Response(
             OrderSerializer(orders, many=True, context={"request": request}).data,
             status=status.HTTP_201_CREATED,
@@ -527,6 +531,9 @@ class ConsumerPaymentProofAPIView(APIView):
         )
         order.status = Order.Status.PAYMENT_SUBMITTED
         order.save(update_fields=["status", "updated_at"])
+        from .notification_utils import notify_business_payment_proof
+
+        notify_business_payment_proof(order)
         return Response(
             OrderPaymentProofSerializer(proof, context={"request": request}).data,
             status=status.HTTP_201_CREATED,
@@ -712,7 +719,11 @@ class BusinessOrderDetailAPIView(generics.RetrieveAPIView):
     lookup_url_kwarg = "public_id"
 
     def get_queryset(self):
-        return Order.objects.filter(business=self.request.user.business_profile)
+        return (
+            Order.objects.filter(business=self.request.user.business_profile)
+            .select_related("business", "branch", "user")
+            .prefetch_related("items", "payment_proofs", "delivery_snapshot")
+        )
 
 
 class BusinessOrderStatusAPIView(APIView):
@@ -822,6 +833,61 @@ class BusinessStatsAPIView(APIView):
                     business=business, is_enabled=True, is_available=True
                 ).count(),
             }
+        )
+
+
+# ---- Business notifications ----
+
+
+class BusinessNotificationListAPIView(APIView):
+    permission_classes = [IsAuthenticated, IsBusinessAccount]
+
+    def get(self, request):
+        from .models import Notification
+        from .serializers import NotificationSerializer
+        from .views import _paginate_notifications
+
+        qs = Notification.objects.filter(user=request.user)
+        return _paginate_notifications(qs, request)
+
+
+class BusinessNotificationUnreadCountAPIView(APIView):
+    permission_classes = [IsAuthenticated, IsBusinessAccount]
+
+    def get(self, request):
+        from .models import Notification
+
+        count = Notification.objects.filter(
+            user=request.user, read_at__isnull=True
+        ).count()
+        return Response({"unread_count": count})
+
+
+class BusinessNotificationMarkReadAPIView(APIView):
+    permission_classes = [IsAuthenticated, IsBusinessAccount]
+
+    def post(self, request, notification_id):
+        from .models import Notification
+        from .serializers import NotificationSerializer
+
+        notification = get_object_or_404(
+            Notification, pk=notification_id, user=request.user
+        )
+        notification.mark_read()
+        return Response(NotificationSerializer(notification).data)
+
+
+class BusinessNotificationMarkAllReadAPIView(APIView):
+    permission_classes = [IsAuthenticated, IsBusinessAccount]
+
+    def post(self, request):
+        from .models import Notification
+
+        updated = Notification.objects.filter(
+            user=request.user, read_at__isnull=True
+        ).update(read_at=timezone.now())
+        return Response(
+            {"message": "All notifications marked as read.", "updated": updated}
         )
 
 

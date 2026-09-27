@@ -785,6 +785,11 @@ class Notification(models.Model):
             "redemption_confirmation",
             "Redemption confirmation",
         )
+        BUSINESS_NEW_ORDER = ("business_new_order", "Business new order")
+        BUSINESS_PAYMENT_PROOF = (
+            "business_payment_proof",
+            "Business payment proof submitted",
+        )
         GENERIC = ("generic", "Generic")
 
     user = models.ForeignKey(
