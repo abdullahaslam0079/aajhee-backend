@@ -87,6 +87,10 @@ class Migration(migrations.Migration):
         ("discounts", "0027_rename_same_day_fulfillment_fields"),
     ]
 
+    # Each operation commits separately. Required on Postgres when UPDATEing
+    # discounts_business and later creating an index on the same table.
+    atomic = False
+
     operations = [
         migrations.AddField(
             model_name="business",
@@ -185,20 +189,4 @@ class Migration(migrations.Migration):
             reverse_sql=migrations.RunSQL.noop,
         ),
         migrations.RunPython(seed_merchant_categories, noop_reverse),
-        # Create the index only after UPDATEs so Postgres does not hit
-        # "cannot CREATE INDEX ... because it has pending trigger events".
-        migrations.AlterField(
-            model_name="business",
-            name="verification_status",
-            field=models.CharField(
-                choices=[
-                    ("under_review", "Under review"),
-                    ("verified", "Verified"),
-                    ("suspended", "Suspended"),
-                ],
-                db_index=True,
-                default="under_review",
-                max_length=20,
-            ),
-        ),
     ]
