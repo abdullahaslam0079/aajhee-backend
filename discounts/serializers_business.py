@@ -250,7 +250,14 @@ class BusinessProfileSerializer(serializers.ModelSerializer):
 
     def run_validation(self, data=serializers.empty):
         if data is not serializers.empty and hasattr(data, "get"):
-            payload = data.copy() if hasattr(data, "copy") else dict(data)
+            # Multipart/form QueryDicts coerce assigned dicts to invalid
+            # Python-repr strings; normalize to a plain dict first.
+            if hasattr(data, "lists"):
+                payload = {key: data.get(key) for key in data.keys()}
+            elif hasattr(data, "copy"):
+                payload = dict(data.copy())
+            else:
+                payload = dict(data)
             for key in ("logo", "cnic_image", "shop_photo"):
                 value = payload.get(key)
                 if value in (None, "", b"", [], "null", "none", "undefined"):
@@ -267,7 +274,7 @@ class BusinessProfileSerializer(serializers.ModelSerializer):
             if "business_hours" in payload and isinstance(
                 payload.get("business_hours"), str
             ):
-                raw_hours = payload.get("business_hours") or "{}"
+                raw_hours = (payload.get("business_hours") or "").strip() or "{}"
                 try:
                     payload["business_hours"] = json.loads(raw_hours)
                 except json.JSONDecodeError as exc:
