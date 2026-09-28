@@ -160,15 +160,13 @@ def place_orders_from_cart(
     phone = normalize_pakistani_mobile(
         customer_phone or (groups[0].get("customer_phone") if groups else None) or user.phone
     )
-    # Persist on profile for next checkout (contact number, not auth re-bind).
+    # Prefer saving contact phone on the profile for next checkout, but never
+    # block placing an order if another account already owns that unique phone.
     if user.phone != phone:
         conflict = type(user).objects.filter(phone=phone).exclude(pk=user.pk).exists()
-        if conflict:
-            raise ValidationError(
-                {"customer_phone": "This mobile number is already used by another account."}
-            )
-        user.phone = phone
-        user.save(update_fields=["phone"])
+        if not conflict:
+            user.phone = phone
+            user.save(update_fields=["phone"])
 
     cart_items = {
         item.id: item
@@ -226,8 +224,10 @@ def place_orders_from_cart(
             if not settings.stripe_enabled:
                 raise ValidationError({"payment_method": "Card / Stripe payment is not enabled."})
         elif payment_method == Order.PaymentMethod.JAZZCASH:
-            if not settings.jazzcash_enabled:
-                raise ValidationError({"payment_method": "Mobile wallet is not enabled."})
+            if not settings.jazzcash_enabled and not settings.easypaisa_enabled:
+                raise ValidationError(
+                    {"payment_method": "JazzCash / Easypaisa is not enabled."}
+                )
 
         needs_proof = requires_payment_proof(payment_method)
         proof_file = proof_files.get(index)
@@ -365,6 +365,9 @@ def place_orders_from_cart(
                 "bank_transfer_enabled": settings.bank_transfer_enabled,
                 "stripe_enabled": settings.stripe_enabled,
                 "jazzcash_enabled": settings.jazzcash_enabled,
+                "easypaisa_enabled": settings.easypaisa_enabled,
+                "same_day_radius_km": str(settings.same_day_radius_km),
+                "same_day_areas": settings.same_day_areas,
             },
         )
 

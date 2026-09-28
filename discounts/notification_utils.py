@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import logging
 
+from django.conf import settings
+from django.core.mail import send_mail
+
 from .fcm import send_fcm_to_tokens
 from .models import BusinessLike, DeviceToken, Notification, Offer, Order, UserPreferences
 
@@ -49,6 +52,86 @@ def create_and_push_notification(
             },
         )
     return notification
+
+
+def _order_email_lines(order: Order, intro: str) -> list[str]:
+    customer_name = ""
+    if order.user_id:
+        full = f"{order.user.first_name or ''} {order.user.last_name or ''}".strip()
+        customer_name = full or order.user.email or ""
+    phone = order.customer_phone or getattr(order.user, "phone", None) or "—"
+    lines = [
+        intro,
+        "",
+        f"Order: #{str(order.public_id)[:8]}",
+        f"Branch: {order.branch.name if order.branch_id else '—'}",
+        f"Total: Rs {order.total}",
+        f"Fulfillment: {order.get_fulfillment_type_display()}",
+        f"Payment: {order.get_payment_method_display()} ({order.get_payment_status_display()})",
+        f"Customer: {customer_name or '—'}",
+        f"Phone: {phone}",
+    ]
+    if order.delivery_address_text:
+        lines.append(f"Address: {order.delivery_address_text}")
+    if order.delivery_landmark:
+        lines.append(f"Landmark: {order.delivery_landmark}")
+    if order.customer_notes:
+        lines.append(f"Notes: {order.customer_notes}")
+    lines.extend(["", "Open your Aajhee Business panel to accept or fulfill this order.", "", "— Aajhee"])
+    return lines
+
+
+def _send_business_order_email(order: Order, *, subject: str, intro: str) -> None:
+    owner = getattr(order.business, "owner", None)
+    email = getattr(owner, "email", None) if owner else None
+    if not email:
+        return
+    try:
+        send_mail(
+            subject=subject,
+            message="\n".join(_order_email_lines(order, intro)),
+            from_email=settings.DEFAULT_FROM_EMAIL,
+            recipient_list=[email],
+            fail_silently=False,
+        )
+    except Exception:
+        logger.exception(
+            "Failed to email business %s about order %s", email, order.public_id
+        )
+
+
+def notify_business_whatsapp_or_sms(order: Order, *, event: str) -> None:
+    """
+    Alert the merchant WhatsApp/notification number when configured.
+
+    TODO: Wire WhatsApp Business API / Twilio (or similar) when provider credentials
+    are set (e.g. WHATSAPP_PROVIDER, TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN,
+    TWILIO_WHATSAPP_FROM). Until then this only logs that delivery was skipped.
+    """
+    business = order.business
+    number = (getattr(business, "notification_whatsapp", None) or "").strip()
+    if not number:
+        return
+    provider = (getattr(settings, "WHATSAPP_PROVIDER", None) or "").strip()
+    if not provider:
+        # TODO: implement provider send once WHATSAPP_PROVIDER is configured.
+        logger.info(
+            "WhatsApp/SMS notify skipped (no provider configured): "
+            "number=%s event=%s order=%s",
+            number,
+            event,
+            order.public_id,
+        )
+        return
+    # TODO: dispatch to the configured WhatsApp/SMS provider.
+    logger.warning(
+        "WhatsApp provider '%s' is set but no send implementation exists yet "
+        "(number=%s event=%s order=%s)",
+        provider,
+        number,
+        event,
+        order.public_id,
+    )
 
 
 def notify_favorited_business_new_offer(offer: Offer) -> int:
@@ -106,8 +189,9 @@ def notify_business_new_order(order: Order) -> Notification | None:
     owner_id = getattr(order.business, "owner_id", None)
     if not owner_id:
         return None
+    notification = None
     try:
-        return create_and_push_notification(
+        notification = create_and_push_notification(
             user_id=owner_id,
             type=Notification.NotificationType.BUSINESS_NEW_ORDER,
             title="New order",
@@ -126,7 +210,14 @@ def notify_business_new_order(order: Order) -> Notification | None:
         )
     except Exception:
         logger.exception("Failed to notify business about order %s", order.public_id)
-        return None
+
+    _send_business_order_email(
+        order,
+        subject=f"New Aajhee order · Rs {order.total}",
+        intro="You have a new order on Aajhee.",
+    )
+    notify_business_whatsapp_or_sms(order, event="new_order")
+    return notification
 
 
 def notify_business_payment_proof(order: Order) -> Notification | None:
@@ -134,8 +225,9 @@ def notify_business_payment_proof(order: Order) -> Notification | None:
     owner_id = getattr(order.business, "owner_id", None)
     if not owner_id:
         return None
+    notification = None
     try:
-        return create_and_push_notification(
+        notification = create_and_push_notification(
             user_id=owner_id,
             type=Notification.NotificationType.BUSINESS_PAYMENT_PROOF,
             title="Payment proof submitted",
@@ -152,7 +244,14 @@ def notify_business_payment_proof(order: Order) -> Notification | None:
         logger.exception(
             "Failed to notify business about payment proof for %s", order.public_id
         )
-        return None
+
+    _send_business_order_email(
+        order,
+        subject=f"Payment proof · order #{str(order.public_id)[:8]}",
+        intro="A customer submitted a payment proof for review.",
+    )
+    notify_business_whatsapp_or_sms(order, event="payment_proof")
+    return notification
 
 
 def notify_customer_order_status(order: Order) -> Notification | None:

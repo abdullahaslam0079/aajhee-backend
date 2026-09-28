@@ -1,5 +1,7 @@
 from django.contrib.auth import get_user_model
+from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ObjectDoesNotExist
+from django.core.exceptions import ValidationError as DjangoValidationError
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
@@ -142,6 +144,10 @@ class AdminBusinessSerializer(BusinessProfileSerializer):
     redemption_count = serializers.SerializerMethodField()
     view_count = serializers.SerializerMethodField()
     like_count = serializers.SerializerMethodField()
+    verification_status = serializers.ChoiceField(
+        choices=Business.VerificationStatus.choices,
+        required=False,
+    )
 
     class Meta(BusinessProfileSerializer.Meta):
         fields = BusinessProfileSerializer.Meta.fields + [
@@ -155,7 +161,11 @@ class AdminBusinessSerializer(BusinessProfileSerializer):
             "view_count",
             "like_count",
         ]
-        read_only_fields = BusinessProfileSerializer.Meta.read_only_fields + [
+        read_only_fields = [
+            field
+            for field in BusinessProfileSerializer.Meta.read_only_fields
+            if field != "verification_status"
+        ] + [
             "owner_id",
             "owner_email",
             "owner_is_active",
@@ -198,6 +208,26 @@ class AdminBusinessSerializer(BusinessProfileSerializer):
 
 class AdminBusinessCreateSerializer(BusinessRegisterSerializer):
     """Creates owner + business from admin panel (same shape as merchant register)."""
+
+    phone = serializers.CharField(required=False, allow_blank=True, max_length=40)
+    instagram_url = serializers.URLField(required=False, allow_blank=True, max_length=300)
+
+    def validate(self, attrs):
+        if attrs["password"] != attrs["password_confirm"]:
+            raise serializers.ValidationError(
+                {"password_confirm": "Passwords do not match."}
+            )
+        try:
+            validate_password(attrs["password"])
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError({"password": list(exc.messages)}) from exc
+        return attrs
+
+    def create(self, validated_data):
+        business = super().create(validated_data)
+        business.verification_status = Business.VerificationStatus.VERIFIED
+        business.save(update_fields=["verification_status"])
+        return business
 
 
 class AdminBranchSerializer(BranchSerializer):

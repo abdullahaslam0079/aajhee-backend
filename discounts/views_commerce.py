@@ -1,7 +1,7 @@
 from decimal import Decimal
 from datetime import timedelta
 
-from django.db.models import Count, F, Prefetch, Q, Sum
+from django.db.models import Case, Count, F, IntegerField, Prefetch, Q, Sum, When
 from django.db.models.functions import TruncDate
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
@@ -446,8 +446,10 @@ class CheckoutPreviewAPIView(UserLocationContextMixin, APIView):
                     "bank_transfer_instructions": settings.bank_transfer_instructions,
                     "stripe": settings.stripe_enabled,
                     "stripe_instructions": settings.stripe_instructions,
-                    "jazzcash": settings.jazzcash_enabled,
+                    "jazzcash": settings.jazzcash_enabled or settings.easypaisa_enabled,
                     "jazzcash_instructions": settings.jazzcash_instructions,
+                    "easypaisa": settings.easypaisa_enabled,
+                    "easypaisa_instructions": settings.easypaisa_instructions,
                 },
             }
         )
@@ -912,7 +914,17 @@ class BusinessOrderListAPIView(generics.ListAPIView):
             qs = qs.filter(placed_at__date__gte=date_from)
         if date_to:
             qs = qs.filter(placed_at__date__lte=date_to)
-        return qs
+        # Same-day Lahore orders float to the top of the merchant queue.
+        return qs.annotate(
+            same_day_rank=Case(
+                When(
+                    fulfillment_type=Order.FulfillmentType.LOCAL_SAME_DAY,
+                    then=0,
+                ),
+                default=1,
+                output_field=IntegerField(),
+            )
+        ).order_by("same_day_rank", "-placed_at")
 
 
 class BusinessOrderDetailAPIView(generics.RetrieveAPIView):

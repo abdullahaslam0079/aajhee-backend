@@ -134,6 +134,8 @@ class BranchFulfillmentSettingsSerializer(serializers.ModelSerializer):
             "same_day_enabled",
             "same_day_fee",
             "same_day_max_delivery_hours",
+            "same_day_radius_km",
+            "same_day_areas",
             "nationwide_enabled",
             "nationwide_delivery_fee",
             "nationwide_max_delivery_hours",
@@ -148,6 +150,8 @@ class BranchFulfillmentSettingsSerializer(serializers.ModelSerializer):
             "stripe_instructions",
             "jazzcash_enabled",
             "jazzcash_instructions",
+            "easypaisa_enabled",
+            "easypaisa_instructions",
             "cash_on_pickup_enabled",
             "cash_on_delivery_enabled",
             "updated_at",
@@ -627,7 +631,14 @@ class OrderSerializer(serializers.ModelSerializer):
         if obj.payment_method == Order.PaymentMethod.STRIPE:
             return settings.stripe_instructions
         if obj.payment_method == Order.PaymentMethod.JAZZCASH:
-            return settings.jazzcash_instructions
+            parts = []
+            if settings.jazzcash_enabled and settings.jazzcash_instructions:
+                parts.append(f"JazzCash:\n{settings.jazzcash_instructions}")
+            if settings.easypaisa_enabled and settings.easypaisa_instructions:
+                parts.append(f"Easypaisa:\n{settings.easypaisa_instructions}")
+            if parts:
+                return "\n\n".join(parts)
+            return settings.jazzcash_instructions or settings.easypaisa_instructions
         return ""
 
     def get_bank_transfer_instructions(self, obj: Order) -> str:
@@ -671,6 +682,16 @@ class CheckoutPlaceSerializer(serializers.Serializer):
 class OrderStatusUpdateSerializer(serializers.Serializer):
     status = serializers.ChoiceField(choices=Order.Status.choices)
     reason = serializers.CharField(required=False, allow_blank=True, default="")
+
+    def validate(self, attrs):
+        if attrs["status"] == Order.Status.CANCELLED:
+            reason = (attrs.get("reason") or "").strip()
+            if not reason:
+                raise serializers.ValidationError(
+                    {"reason": "A cancel reason is required."}
+                )
+            attrs["reason"] = reason
+        return attrs
 
 
 class PaymentProofUploadSerializer(serializers.Serializer):

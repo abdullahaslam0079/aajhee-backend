@@ -64,6 +64,26 @@ class BusinessRegisterSerializer(serializers.Serializer):
             "does_not_exist": "Selected category does not exist.",
         },
     )
+    phone = serializers.CharField(
+        max_length=40,
+        required=True,
+        trim_whitespace=True,
+        error_messages={
+            "required": "Phone number is required.",
+            "blank": "Phone number is required.",
+        },
+    )
+    instagram_url = serializers.URLField(
+        required=True,
+        max_length=300,
+        error_messages={
+            "required": "Instagram link is required.",
+            "blank": "Instagram link is required.",
+            "invalid": "Enter a valid Instagram URL.",
+        },
+    )
+    cnic_image = OptionalImageField(required=False, allow_null=True)
+    shop_photo = OptionalImageField(required=False, allow_null=True)
     logo = OptionalImageField(required=False, allow_null=True)
     presence_mode = serializers.ChoiceField(
         choices=Business.PresenceMode.choices,
@@ -79,9 +99,10 @@ class BusinessRegisterSerializer(serializers.Serializer):
     def run_validation(self, data=serializers.empty):
         if data is not serializers.empty and hasattr(data, "get"):
             payload = data.copy() if hasattr(data, "copy") else dict(data)
-            logo = payload.get("logo")
-            if logo in (None, "", b"", [], "null", "none", "undefined"):
-                payload.pop("logo", None)
+            for key in ("logo", "cnic_image", "shop_photo"):
+                value = payload.get(key)
+                if value in (None, "", b"", [], "null", "none", "undefined"):
+                    payload.pop(key, None)
             return super().run_validation(payload)
         return super().run_validation(data)
 
@@ -98,6 +119,12 @@ class BusinessRegisterSerializer(serializers.Serializer):
             )
         return email
 
+    def validate_phone(self, value: str) -> str:
+        phone = value.strip()
+        if len(phone) < 7:
+            raise serializers.ValidationError("Enter a valid phone number.")
+        return phone
+
     def validate(self, attrs):
         if attrs["password"] != attrs["password_confirm"]:
             raise serializers.ValidationError(
@@ -107,6 +134,15 @@ class BusinessRegisterSerializer(serializers.Serializer):
             validate_password(attrs["password"])
         except DjangoValidationError as exc:
             raise serializers.ValidationError({"password": list(exc.messages)}) from exc
+        cnic = attrs.get("cnic_image")
+        shop = attrs.get("shop_photo")
+        if not cnic and not shop:
+            raise serializers.ValidationError(
+                {
+                    "cnic_image": "Upload a CNIC or shop photo for verification.",
+                    "shop_photo": "Upload a CNIC or shop photo for verification.",
+                }
+            )
         return attrs
 
     def create(self, validated_data):
@@ -115,6 +151,10 @@ class BusinessRegisterSerializer(serializers.Serializer):
         email = validated_data.pop("email")
         name = validated_data.pop("name")
         category = validated_data.pop("category")
+        phone = validated_data.pop("phone", "") or ""
+        instagram_url = validated_data.pop("instagram_url", "") or ""
+        cnic_image = validated_data.pop("cnic_image", None)
+        shop_photo = validated_data.pop("shop_photo", None)
         logo = validated_data.pop("logo", None)
         presence_mode = validated_data.pop(
             "presence_mode", Business.PresenceMode.HYBRID
@@ -127,12 +167,19 @@ class BusinessRegisterSerializer(serializers.Serializer):
             email=email,
             password=password,
             account_type=User.AccountType.BUSINESS,
+            phone=phone,
         )
         business = Business.objects.create(
             owner=user,
             name=name,
             category=category,
             logo=logo,
+            phone=phone,
+            instagram_url=instagram_url,
+            cnic_image=cnic_image,
+            shop_photo=shop_photo,
+            notification_whatsapp=phone,
+            verification_status=Business.VerificationStatus.UNDER_REVIEW,
             presence_mode=presence_mode,
             online_coverage=online_coverage,
         )
@@ -154,6 +201,18 @@ class BusinessProfileSerializer(serializers.ModelSerializer):
     category = CategorySerializer(read_only=True, allow_null=True)
     logo = OptionalImageField(required=False, allow_null=True, write_only=True)
     logo_url = serializers.SerializerMethodField()
+    cnic_image = OptionalImageField(required=False, allow_null=True, write_only=True)
+    shop_photo = OptionalImageField(required=False, allow_null=True, write_only=True)
+    cnic_image_url = serializers.SerializerMethodField()
+    shop_photo_url = serializers.SerializerMethodField()
+    verification_status = serializers.CharField(read_only=True)
+    is_paused = serializers.BooleanField(required=False)
+    business_hours = serializers.JSONField(required=False)
+    notification_whatsapp = serializers.CharField(
+        required=False, allow_blank=True, max_length=40
+    )
+    phone = serializers.CharField(required=False, allow_blank=True, max_length=40)
+    instagram_url = serializers.URLField(required=False, allow_blank=True, max_length=300)
 
     class Meta:
         model = Business
@@ -168,20 +227,64 @@ class BusinessProfileSerializer(serializers.ModelSerializer):
             "category",
             "presence_mode",
             "online_coverage",
+            "verification_status",
+            "phone",
+            "instagram_url",
+            "cnic_image",
+            "shop_photo",
+            "cnic_image_url",
+            "shop_photo_url",
+            "notification_whatsapp",
+            "is_paused",
+            "business_hours",
         ]
-        read_only_fields = ["id", "email", "category_name", "category"]
+        read_only_fields = [
+            "id",
+            "email",
+            "category_name",
+            "category",
+            "cnic_image_url",
+            "shop_photo_url",
+            "verification_status",
+        ]
 
     def run_validation(self, data=serializers.empty):
         if data is not serializers.empty and hasattr(data, "get"):
             payload = data.copy() if hasattr(data, "copy") else dict(data)
-            logo = payload.get("logo")
-            if logo in (None, "", b"", [], "null", "none", "undefined"):
-                payload.pop("logo", None)
+            for key in ("logo", "cnic_image", "shop_photo"):
+                value = payload.get(key)
+                if value in (None, "", b"", [], "null", "none", "undefined"):
+                    payload.pop(key, None)
+            if "is_paused" in payload:
+                raw = payload.get("is_paused")
+                if isinstance(raw, str):
+                    payload["is_paused"] = raw.strip().lower() in (
+                        "1",
+                        "true",
+                        "yes",
+                        "on",
+                    )
+            if "business_hours" in payload and isinstance(
+                payload.get("business_hours"), str
+            ):
+                raw_hours = payload.get("business_hours") or "{}"
+                try:
+                    payload["business_hours"] = json.loads(raw_hours)
+                except json.JSONDecodeError as exc:
+                    raise serializers.ValidationError(
+                        {"business_hours": "Invalid business hours JSON."}
+                    ) from exc
             return super().run_validation(payload)
         return super().run_validation(data)
 
     def get_logo_url(self, obj: Business) -> str | None:
         return build_media_url(self.context.get("request"), obj.logo)
+
+    def get_cnic_image_url(self, obj: Business) -> str | None:
+        return build_media_url(self.context.get("request"), obj.cnic_image)
+
+    def get_shop_photo_url(self, obj: Business) -> str | None:
+        return build_media_url(self.context.get("request"), obj.shop_photo)
 
     def to_representation(self, instance):
         data = super().to_representation(instance)
@@ -191,6 +294,9 @@ class BusinessProfileSerializer(serializers.ModelSerializer):
         data["category_ids"] = list(instance.categories.values_list("id", flat=True))
         data["primary_city_id"] = instance.primary_city_id
         data["primary_country_id"] = instance.primary_country_id
+        data["verification_status"] = instance.verification_status
+        data["is_paused"] = instance.is_paused
+        data["is_customer_visible"] = instance.is_customer_visible()
         return data
 
 

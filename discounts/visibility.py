@@ -40,6 +40,15 @@ def resolve_business_visibility(
     *,
     branches: list[Branch] | None = None,
 ) -> ChannelVisibility:
+    # Unverified, suspended, or paused shops stay hidden from customers.
+    if not business.is_customer_visible():
+        return ChannelVisibility(
+            show_online=False,
+            show_instore=False,
+            nearest_branch_id=None,
+            nearest_distance_km=None,
+        )
+
     branch_list = branches if branches is not None else list(business.branches.all())
     nearest_id: int | None = None
     nearest_km: float | None = None

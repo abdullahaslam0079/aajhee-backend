@@ -137,6 +137,11 @@ class Business(models.Model):
         CITY = "city", "City"
         COUNTRY = "country", "Whole country"
 
+    class VerificationStatus(models.TextChoices):
+        UNDER_REVIEW = "under_review", "Under review"
+        VERIFIED = "verified", "Verified"
+        SUSPENDED = "suspended", "Suspended"
+
     owner = models.OneToOneField(
         User, on_delete=models.CASCADE, related_name="business_profile"
     )
@@ -180,6 +185,41 @@ class Business(models.Model):
         blank=True,
         related_name="primary_businesses",
     )
+    verification_status = models.CharField(
+        max_length=20,
+        choices=VerificationStatus.choices,
+        default=VerificationStatus.UNDER_REVIEW,
+        db_index=True,
+    )
+    phone = models.CharField(max_length=40, blank=True)
+    instagram_url = models.URLField(max_length=300, blank=True)
+    cnic_image = models.ImageField(
+        upload_to="business_cnic/", null=True, blank=True
+    )
+    shop_photo = models.ImageField(
+        upload_to="business_shop_photos/", null=True, blank=True
+    )
+    notification_whatsapp = models.CharField(
+        max_length=40,
+        blank=True,
+        help_text="WhatsApp/SMS number for order alerts (provider optional).",
+    )
+    is_paused = models.BooleanField(
+        default=False,
+        help_text="When true, hide the store from customers without deleting it.",
+    )
+    business_hours = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text='Weekly hours, e.g. {"mon": {"open": "10:00", "close": "22:00", "closed": false}}',
+    )
+
+    def is_customer_visible(self) -> bool:
+        """Visible in customer feeds only when verified and not paused."""
+        return (
+            self.verification_status == self.VerificationStatus.VERIFIED
+            and not self.is_paused
+        )
 
     def __str__(self) -> str:
         return self.name
@@ -280,6 +320,16 @@ class BranchFulfillmentSettings(models.Model):
         max_digits=10, decimal_places=2, default=Decimal("0.00")
     )
     same_day_max_delivery_hours = models.PositiveIntegerField(default=24)
+    same_day_radius_km = models.DecimalField(
+        max_digits=6,
+        decimal_places=2,
+        default=Decimal("15.00"),
+        help_text="Same-day delivery radius in km (e.g. within Lahore).",
+    )
+    same_day_areas = models.TextField(
+        blank=True,
+        help_text="Comma-separated delivery areas, e.g. DHA, Gulberg, Johar Town.",
+    )
     nationwide_enabled = models.BooleanField(default=False)
     nationwide_delivery_fee = models.DecimalField(
         max_digits=10,
@@ -303,6 +353,8 @@ class BranchFulfillmentSettings(models.Model):
     stripe_instructions = models.TextField(blank=True)
     jazzcash_enabled = models.BooleanField(default=False)
     jazzcash_instructions = models.TextField(blank=True)
+    easypaisa_enabled = models.BooleanField(default=False)
+    easypaisa_instructions = models.TextField(blank=True)
     cash_on_pickup_enabled = models.BooleanField(default=True)
     cash_on_delivery_enabled = models.BooleanField(default=True)
     updated_at = models.DateTimeField(auto_now=True)
