@@ -1,4 +1,8 @@
 # Merchant verification, pause/hours, same-day areas, categories seed.
+#
+# Note: verification_status is added WITHOUT db_index first, then data is updated,
+# then the index is created. Postgres rejects CREATE INDEX in the same transaction
+# as UPDATEs on the same table ("pending trigger events").
 
 from django.db import migrations, models
 from django.utils.text import slugify
@@ -93,7 +97,6 @@ class Migration(migrations.Migration):
                     ("verified", "Verified"),
                     ("suspended", "Suspended"),
                 ],
-                db_index=True,
                 default="under_review",
                 max_length=20,
             ),
@@ -182,4 +185,20 @@ class Migration(migrations.Migration):
             reverse_sql=migrations.RunSQL.noop,
         ),
         migrations.RunPython(seed_merchant_categories, noop_reverse),
+        # Create the index only after UPDATEs so Postgres does not hit
+        # "cannot CREATE INDEX ... because it has pending trigger events".
+        migrations.AlterField(
+            model_name="business",
+            name="verification_status",
+            field=models.CharField(
+                choices=[
+                    ("under_review", "Under review"),
+                    ("verified", "Verified"),
+                    ("suspended", "Suspended"),
+                ],
+                db_index=True,
+                default="under_review",
+                max_length=20,
+            ),
+        ),
     ]
