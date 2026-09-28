@@ -306,6 +306,9 @@ class AdminBusinessListCreateAPIView(APIView):
         category_id = request.query_params.get("category_id")
         if category_id:
             qs = qs.filter(category_id=category_id)
+        verification_status = (request.query_params.get("verification_status") or "").strip()
+        if verification_status:
+            qs = qs.filter(verification_status=verification_status)
         return _paginate(qs, request, AdminBusinessSerializer)
 
     def post(self, request):
