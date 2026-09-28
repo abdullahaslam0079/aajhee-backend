@@ -5,10 +5,10 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
 
-from django.db.models import F, Max, Prefetch, Q
+from django.db.models import Case, DecimalField, F, Max, Prefetch, Q, When
 from django.utils import timezone
 
-from .models import Offer, OfferBranchStats, OfferRedemption, OfferScan
+from .models import Offer, OfferBranchStats, OfferRedemption, OfferScan, Product
 
 
 def active_offer_q(now=None, prefix=""):
@@ -29,6 +29,12 @@ def active_offer_q(now=None, prefix=""):
             )
         )
     )
+
+
+def active_product_q(prefix="products"):
+    """Enabled + available catalog products linked to a branch."""
+    field = f"{prefix}__" if prefix else ""
+    return Q(**{f"{field}is_enabled": True, f"{field}is_available": True})
 
 
 def filter_active_offers(queryset, now=None):
@@ -307,6 +313,25 @@ def get_highest_discount_active_offer(branch, now=None):
     return max(active_offers, key=lambda offer: offer.discount_percent)
 
 
+def get_highest_discount_active_product(branch):
+    """Best enabled product discount for map/store highlights."""
+    products = [
+        product
+        for product in branch.products.all()
+        if product.is_enabled and product.is_available
+    ]
+    if not products:
+        return None
+
+    def sort_key(product: Product):
+        percent = product.discount_percent
+        if percent is None:
+            percent = product.effective_discount_percent
+        return percent or 0
+
+    return max(products, key=sort_key)
+
+
 def build_media_url(request, file_field) -> str | None:
     if not file_field:
         return None
@@ -338,12 +363,41 @@ def build_offer_image_urls(offer: Offer, request) -> list[str]:
 
 
 def annotate_branch_highlights(queryset, now=None):
+    """
+    Annotate map/store highlight discount from active offers and/or products.
+
+    Commerce-first: branches with catalog products must appear even when no
+    legacy Offer rows exist.
+    """
     now = now or timezone.now()
+    percent_field = DecimalField(max_digits=5, decimal_places=2)
     return queryset.annotate(
-        highest_discount_percent=Max(
+        offer_highest_discount_percent=Max(
             "offers__discount_percent",
             filter=active_offer_q(now, prefix="offers"),
-        )
+        ),
+        product_highest_discount_percent=Max(
+            "products__discount_percent",
+            filter=active_product_q(prefix="products"),
+        ),
+        highest_discount_percent=Case(
+            When(
+                offer_highest_discount_percent__isnull=True,
+                then=F("product_highest_discount_percent"),
+            ),
+            When(
+                product_highest_discount_percent__isnull=True,
+                then=F("offer_highest_discount_percent"),
+            ),
+            When(
+                offer_highest_discount_percent__gte=F(
+                    "product_highest_discount_percent"
+                ),
+                then=F("offer_highest_discount_percent"),
+            ),
+            default=F("product_highest_discount_percent"),
+            output_field=percent_field,
+        ),
     )
 
 
@@ -355,7 +409,13 @@ def prefetch_branch_offers(queryset, now=None):
             queryset=Offer.objects.filter(active_offer_q(now)).prefetch_related(
                 "gallery_images"
             ),
-        )
+        ),
+        Prefetch(
+            "products",
+            queryset=Product.objects.filter(
+                is_enabled=True, is_available=True
+            ).prefetch_related("gallery_images"),
+        ),
     )
 
 
@@ -367,4 +427,11 @@ def branch_highlight_queryset(queryset, now=None):
             now,
         ),
         now,
+    )
+
+
+def map_visible_branches_q():
+    """Branches that should appear on Discover/Stores (offers or products)."""
+    return Q(highest_discount_percent__isnull=False) | active_product_q(
+        prefix="products"
     )

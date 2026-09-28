@@ -46,6 +46,7 @@ from .offer_utils import (
     build_user_redemption_map,
     filter_active_offers,
     get_user_offer_usage_status,
+    map_visible_branches_q,
 )
 from .pagination import page_payload, parse_page_params, slice_page, slice_queryset
 from .permissions import IsConsumerAccount
@@ -220,7 +221,7 @@ class MapBranchesAPIView(UserLocationContextMixin, generics.ListAPIView):
     def get_queryset(self):
         now = timezone.now()
         queryset = branch_highlight_queryset(Branch.objects.all(), now)
-        queryset = queryset.filter(highest_discount_percent__isnull=False)
+        queryset = queryset.filter(map_visible_branches_q()).distinct()
 
         category_id = self.request.query_params.get("category_id")
         if category_id:
@@ -281,7 +282,7 @@ class MapNearbyBranchesAPIView(UserLocationContextMixin, generics.ListAPIView):
     def get_queryset(self):
         now = timezone.now()
         queryset = branch_highlight_queryset(Branch.objects.all(), now)
-        queryset = queryset.filter(highest_discount_percent__isnull=False)
+        queryset = queryset.filter(map_visible_branches_q()).distinct()
 
         category_id = self.request.query_params.get("category_id")
         if category_id:

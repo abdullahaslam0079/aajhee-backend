@@ -35,6 +35,17 @@ def normalize_city(city: str) -> str:
     return city.strip().casefold()
 
 
+def cities_match(branch_city: str, user_city: str) -> bool:
+    """Match exact city names and common suffixes (e.g. Lahore vs Lahore Cant)."""
+    a = normalize_city(branch_city)
+    b = normalize_city(user_city)
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    return a.startswith(f"{b} ") or b.startswith(f"{a} ")
+
+
 def haversine_km(lat1, lon1, lat2, lon2) -> float:
     lat1_f, lon1_f, lat2_f, lon2_f = map(float, [lat1, lon1, lat2, lon2])
     dlat = radians(lat2_f - lat1_f)
@@ -158,7 +169,7 @@ def branches_in_city(branches: list[Branch], location: UserLocation) -> list[Bra
     return [
         branch
         for branch in branches
-        if normalize_city(branch.city) == location.city_normalized
+        if cities_match(branch.city, location.city)
     ]
 
 

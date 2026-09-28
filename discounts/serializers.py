@@ -28,6 +28,7 @@ from .offer_utils import (
     branch_highlight_queryset,
     build_user_redemption_map,
     get_highest_discount_active_offer,
+    get_highest_discount_active_product,
     get_user_offer_usage_status,
 )
 
@@ -495,13 +496,39 @@ class BranchHighlightSerializer(serializers.ModelSerializer):
         if annotated is not None:
             return annotated
         top_offer = get_highest_discount_active_offer(obj)
-        return top_offer.discount_percent if top_offer else None
+        if top_offer is not None:
+            return top_offer.discount_percent
+        top_product = get_highest_discount_active_product(obj)
+        if top_product is None:
+            return None
+        if top_product.discount_percent is not None:
+            return top_product.discount_percent
+        return top_product.effective_discount_percent
 
     def get_highest_discount_offer(self, obj: Branch):
         top_offer = get_highest_discount_active_offer(obj)
-        if top_offer is None:
+        if top_offer is not None:
+            return BranchTopOfferSerializer(top_offer, context=self.context).data
+
+        top_product = get_highest_discount_active_product(obj)
+        if top_product is None:
             return None
-        return BranchTopOfferSerializer(top_offer, context=self.context).data
+
+        request = self.context.get("request")
+        image_url = build_media_url(request, top_product.image)
+        percent = top_product.discount_percent
+        if percent is None:
+            percent = top_product.effective_discount_percent
+        return {
+            "id": top_product.id,
+            "title": top_product.name,
+            "description": top_product.description,
+            "detailed_description": top_product.detailed_description,
+            "discount_percent": percent,
+            "image_url": image_url,
+            "image_urls": [image_url] if image_url else [],
+            "is_active": top_product.is_enabled and top_product.is_available,
+        }
 
 
 class MapBranchSerializer(BranchHighlightSerializer):
