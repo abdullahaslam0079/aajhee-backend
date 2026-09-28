@@ -24,6 +24,7 @@ from .models import (
     Country,
     Order,
     OrderPaymentProof,
+    OrderProblemReport,
     Product,
     ProductEngagementStats,
     ProductGalleryImage,
@@ -54,7 +55,9 @@ from .serializers_commerce import (
     CheckoutPreviewSerializer,
     CitySerializer,
     CountrySerializer,
+    OrderCancelSerializer,
     OrderPaymentProofSerializer,
+    OrderProblemReportSerializer,
     OrderSerializer,
     OrderStatusUpdateSerializer,
     PaymentProofReviewSerializer,
@@ -452,21 +455,58 @@ class CheckoutPreviewAPIView(UserLocationContextMixin, APIView):
 
 class CheckoutPlaceAPIView(UserLocationContextMixin, APIView):
     permission_classes = [IsAuthenticated, IsConsumerAccount]
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
 
     def post(self, request):
-        serializer = CheckoutPlaceSerializer(data=request.data)
+        import json
+
+        raw_groups = request.data.get("groups")
+        if isinstance(raw_groups, str):
+            try:
+                raw_groups = json.loads(raw_groups)
+            except json.JSONDecodeError:
+                return Response(
+                    {"detail": "Invalid groups JSON."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            data = {
+                "groups": raw_groups,
+                "customer_phone": request.data.get("customer_phone") or "",
+            }
+        else:
+            data = request.data
+
+        serializer = CheckoutPlaceSerializer(data=data)
         serializer.is_valid(raise_exception=True)
+
+        proof_files: dict[int, object] = {}
+        for key in request.data.keys():
+            if not isinstance(key, str):
+                continue
+            if key.startswith("proof_") or key.startswith("payment_proof_"):
+                suffix = key.split("_")[-1]
+                if suffix.isdigit():
+                    proof_files[int(suffix)] = request.data.get(key)
+
+        # Also accept a single proof file when there is only one group.
+        if not proof_files and request.data.get("payment_proof") is not None:
+            proof_files[0] = request.data.get("payment_proof")
+
         cart = get_or_create_cart(request.user)
         orders = place_orders_from_cart(
             user=request.user,
             cart=cart,
             groups=serializer.validated_data["groups"],
             location=self.get_user_location(),
+            customer_phone=serializer.validated_data.get("customer_phone") or None,
+            proof_files=proof_files,
         )
-        from .notification_utils import notify_business_new_order
+        from .notification_utils import notify_business_new_order, notify_business_payment_proof
 
         for order in orders:
             notify_business_new_order(order)
+            if order.payment_proofs.exists():
+                notify_business_payment_proof(order)
         return Response(
             OrderSerializer(orders, many=True, context={"request": request}).data,
             status=status.HTTP_201_CREATED,
@@ -479,11 +519,26 @@ class ConsumerOrderListAPIView(generics.ListAPIView):
     pagination_class = StandardResultsSetPagination
 
     def get_queryset(self):
-        return (
+        qs = (
             Order.objects.filter(user=self.request.user)
-            .select_related("business", "branch")
-            .prefetch_related("items", "payment_proofs", "delivery_snapshot")
+            .select_related("business", "branch", "user")
+            .prefetch_related(
+                "items",
+                "payment_proofs",
+                "delivery_snapshot",
+                "branch__contacts",
+            )
         )
+        status_filter = (self.request.query_params.get("status_group") or "").strip().lower()
+        if status_filter == "active":
+            qs = qs.exclude(
+                status__in=[Order.Status.COMPLETED, Order.Status.CANCELLED]
+            )
+        elif status_filter == "completed":
+            qs = qs.filter(status=Order.Status.COMPLETED)
+        elif status_filter == "cancelled":
+            qs = qs.filter(status=Order.Status.CANCELLED)
+        return qs
 
 
 class ConsumerOrderDetailAPIView(generics.RetrieveAPIView):
@@ -495,8 +550,13 @@ class ConsumerOrderDetailAPIView(generics.RetrieveAPIView):
     def get_queryset(self):
         return (
             Order.objects.filter(user=self.request.user)
-            .select_related("business", "branch")
-            .prefetch_related("items", "payment_proofs", "delivery_snapshot")
+            .select_related("business", "branch", "user")
+            .prefetch_related(
+                "items",
+                "payment_proofs",
+                "delivery_snapshot",
+                "branch__contacts",
+            )
         )
 
 
@@ -505,9 +565,37 @@ class ConsumerOrderCancelAPIView(APIView):
 
     def post(self, request, public_id):
         order = get_object_or_404(Order, public_id=public_id, user=request.user)
-        reason = request.data.get("reason", "")
-        cancel_order(order, by=Order.CancelledBy.CUSTOMER, reason=reason)
+        serializer = OrderCancelSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        cancel_order(
+            order,
+            by=Order.CancelledBy.CUSTOMER,
+            reason=serializer.validated_data.get("reason") or "",
+        )
         return Response(OrderSerializer(order, context={"request": request}).data)
+
+
+class ConsumerOrderProblemReportAPIView(APIView):
+    permission_classes = [IsAuthenticated, IsConsumerAccount]
+
+    def post(self, request, public_id):
+        order = get_object_or_404(Order, public_id=public_id, user=request.user)
+        serializer = OrderProblemReportSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        report = OrderProblemReport.objects.create(
+            order=order,
+            user=request.user,
+            message=serializer.validated_data["message"].strip(),
+        )
+        return Response(
+            {
+                "id": report.id,
+                "order_id": str(order.public_id),
+                "message": report.message,
+                "created_at": report.created_at,
+            },
+            status=status.HTTP_201_CREATED,
+        )
 
 
 class ConsumerPaymentProofAPIView(APIView):
@@ -520,13 +608,14 @@ class ConsumerPaymentProofAPIView(APIView):
         order = get_object_or_404(Order, public_id=public_id, user=request.user)
         if not requires_payment_proof(order.payment_method):
             return Response(
-                {"detail": "Payment proof only applies to bank transfer, card, or JazzCash orders."},
+                {"detail": "Payment proof only applies to bank transfer, card, or mobile wallet orders."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
         if order.status not in (
             Order.Status.AWAITING_PAYMENT,
             Order.Status.ACCEPTED,
             Order.Status.PAYMENT_SUBMITTED,
+            Order.Status.PENDING,
         ):
             return Response(
                 {"detail": "Order is not awaiting payment proof."},
@@ -539,8 +628,14 @@ class ConsumerPaymentProofAPIView(APIView):
             file=serializer.validated_data["file"],
             note=serializer.validated_data.get("note") or "",
         )
-        order.status = Order.Status.PAYMENT_SUBMITTED
-        order.save(update_fields=["status", "updated_at"])
+        if order.status == Order.Status.PENDING:
+            # Already attached at place time path — keep pending for merchant accept.
+            order.payment_status = Order.PaymentStatus.AWAITING_CONFIRMATION
+            order.save(update_fields=["payment_status", "updated_at"])
+        else:
+            order.status = Order.Status.PAYMENT_SUBMITTED
+            order.payment_status = Order.PaymentStatus.AWAITING_CONFIRMATION
+            order.save(update_fields=["status", "payment_status", "updated_at"])
         from .notification_utils import notify_business_payment_proof
 
         notify_business_payment_proof(order)
@@ -786,7 +881,12 @@ class BusinessOrderListAPIView(generics.ListAPIView):
         qs = (
             Order.objects.filter(business=self.request.user.business_profile)
             .select_related("business", "branch", "user")
-            .prefetch_related("items", "payment_proofs", "delivery_snapshot")
+            .prefetch_related(
+                "items",
+                "payment_proofs",
+                "delivery_snapshot",
+                "branch__contacts",
+            )
         )
         status_filter = self.request.query_params.get("status")
         if status_filter:
@@ -800,6 +900,7 @@ class BusinessOrderListAPIView(generics.ListAPIView):
                 Q(public_id__icontains=search)
                 | Q(user__email__icontains=search)
                 | Q(user__phone__icontains=search)
+                | Q(customer_phone__icontains=search)
                 | Q(user__first_name__icontains=search)
                 | Q(user__last_name__icontains=search)
                 | Q(delivery_address_text__icontains=search)
@@ -824,7 +925,12 @@ class BusinessOrderDetailAPIView(generics.RetrieveAPIView):
         return (
             Order.objects.filter(business=self.request.user.business_profile)
             .select_related("business", "branch", "user")
-            .prefetch_related("items", "payment_proofs", "delivery_snapshot")
+            .prefetch_related(
+                "items",
+                "payment_proofs",
+                "delivery_snapshot",
+                "branch__contacts",
+            )
         )
 
 
@@ -866,10 +972,18 @@ class BusinessPaymentProofReviewAPIView(APIView):
         )
         if proof.review_status == OrderPaymentProof.ReviewStatus.ACCEPTED:
             order.status = Order.Status.PAID_CONFIRMED
-            order.save(update_fields=["status", "updated_at"])
+            order.payment_status = Order.PaymentStatus.PAID
+            order.save(update_fields=["status", "payment_status", "updated_at"])
+            from .notification_utils import notify_customer_order_status
+
+            notify_customer_order_status(order)
         elif proof.review_status == OrderPaymentProof.ReviewStatus.REJECTED:
             order.status = Order.Status.AWAITING_PAYMENT
-            order.save(update_fields=["status", "updated_at"])
+            order.payment_status = Order.PaymentStatus.UNPAID
+            order.save(update_fields=["status", "payment_status", "updated_at"])
+            from .notification_utils import notify_customer_order_status
+
+            notify_customer_order_status(order)
         return Response(
             OrderPaymentProofSerializer(proof, context={"request": request}).data
         )
@@ -1184,10 +1298,18 @@ class AdminPaymentProofReviewAPIView(APIView):
         )
         if proof.review_status == OrderPaymentProof.ReviewStatus.ACCEPTED:
             order.status = Order.Status.PAID_CONFIRMED
-            order.save(update_fields=["status", "updated_at"])
+            order.payment_status = Order.PaymentStatus.PAID
+            order.save(update_fields=["status", "payment_status", "updated_at"])
+            from .notification_utils import notify_customer_order_status
+
+            notify_customer_order_status(order)
         elif proof.review_status == OrderPaymentProof.ReviewStatus.REJECTED:
             order.status = Order.Status.AWAITING_PAYMENT
-            order.save(update_fields=["status", "updated_at"])
+            order.payment_status = Order.PaymentStatus.UNPAID
+            order.save(update_fields=["status", "payment_status", "updated_at"])
+            from .notification_utils import notify_customer_order_status
+
+            notify_customer_order_status(order)
         return Response(
             OrderPaymentProofSerializer(proof, context={"request": request}).data
         )

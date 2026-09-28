@@ -153,3 +153,34 @@ def notify_business_payment_proof(order: Order) -> Notification | None:
             "Failed to notify business about payment proof for %s", order.public_id
         )
         return None
+
+
+def notify_customer_order_status(order: Order) -> Notification | None:
+    """Notify the customer when their order status changes."""
+    user_id = getattr(order, "user_id", None)
+    if not user_id:
+        return None
+    try:
+        status_label = order.get_status_display()
+        store = order.business.name if order.business_id else "store"
+        return create_and_push_notification(
+            user_id=user_id,
+            type=Notification.NotificationType.ORDER_STATUS_CHANGED,
+            title=f"Order update · {status_label}",
+            body=f"Your order from {store} is now: {status_label}.",
+            data={
+                "type": Notification.NotificationType.ORDER_STATUS_CHANGED,
+                "order_public_id": str(order.public_id),
+                "order_id": str(order.public_id),
+                "status": order.status,
+                "payment_status": order.payment_status,
+                "business_id": order.business_id,
+                "branch_id": order.branch_id,
+                "route": f"/orders/{order.public_id}",
+            },
+        )
+    except Exception:
+        logger.exception(
+            "Failed to notify customer about order status for %s", order.public_id
+        )
+        return None

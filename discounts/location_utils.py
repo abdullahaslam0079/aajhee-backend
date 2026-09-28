@@ -36,7 +36,7 @@ def normalize_city(city: str) -> str:
 
 
 def cities_match(branch_city: str, user_city: str) -> bool:
-    """Match exact city names and common suffixes (e.g. Lahore vs Lahore Cant)."""
+    """Match exact city names and common suffixes (e.g. City vs City Cant)."""
     a = normalize_city(branch_city)
     b = normalize_city(user_city)
     if not a or not b:

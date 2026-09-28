@@ -275,14 +275,17 @@ class BranchFulfillmentSettings(models.Model):
     pickup_radius_km = models.DecimalField(
         max_digits=6, decimal_places=2, default=Decimal("15.00")
     )
-    local_same_day_enabled = models.BooleanField(default=True)
-    local_delivery_fee = models.DecimalField(
+    same_day_enabled = models.BooleanField(default=True)
+    same_day_fee = models.DecimalField(
         max_digits=10, decimal_places=2, default=Decimal("0.00")
     )
-    local_max_delivery_hours = models.PositiveIntegerField(default=24)
+    same_day_max_delivery_hours = models.PositiveIntegerField(default=24)
     nationwide_enabled = models.BooleanField(default=False)
     nationwide_delivery_fee = models.DecimalField(
-        max_digits=10, decimal_places=2, default=Decimal("0.00")
+        max_digits=10,
+        decimal_places=2,
+        default=Decimal("300.00"),
+        help_text="Standard / nationwide delivery fee in PKR (default Rs 300).",
     )
     nationwide_max_delivery_hours = models.PositiveIntegerField(default=72)
     customer_cancel_policy = models.CharField(
@@ -794,6 +797,10 @@ class Notification(models.Model):
             "business_payment_proof",
             "Business payment proof submitted",
         )
+        ORDER_STATUS_CHANGED = (
+            "order_status_changed",
+            "Order status changed",
+        )
         GENERIC = ("generic", "Generic")
 
     user = models.ForeignKey(
@@ -848,13 +855,20 @@ class Address(models.Model):
     longitude = models.DecimalField(max_digits=9, decimal_places=6)
     is_default = models.BooleanField(default=False)
     delivery_instructions = models.TextField(blank=True, default="")
+    landmark = models.CharField(max_length=160, blank=True, default="")
 
     class Meta:
         verbose_name_plural = "addresses"
 
     @property
     def formatted_address(self) -> str:
-        return f"{self.street} {self.house_number}, {self.postal_code} {self.city}"
+        parts = [f"{self.street} {self.house_number}".strip()]
+        if self.landmark:
+            parts.append(f"Near {self.landmark}")
+        tail = f"{self.postal_code} {self.city}".strip()
+        if tail:
+            parts.append(tail)
+        return ", ".join(p for p in parts if p)
 
     def __str__(self) -> str:
         return self.formatted_address
@@ -1109,11 +1123,16 @@ class Order(models.Model):
         PREPARING = "preparing", "Preparing"
         READY_FOR_PICKUP = "ready_for_pickup", "Ready for pickup"
         OUT_FOR_DELIVERY = "out_for_delivery", "Out for delivery"
-        COMPLETED = "completed", "Completed"
+        COMPLETED = "completed", "Delivered"
+
+    class PaymentStatus(models.TextChoices):
+        UNPAID = "unpaid", "Unpaid"
+        AWAITING_CONFIRMATION = "awaiting_confirmation", "Awaiting confirmation"
+        PAID = "paid", "Paid"
 
     class FulfillmentType(models.TextChoices):
         PICKUP = "pickup", "In-store pickup"
-        LOCAL_SAME_DAY = "local_same_day", "Local / same-day delivery"
+        LOCAL_SAME_DAY = "local_same_day", "Same-day delivery"
         NATIONWIDE = "nationwide", "Nationwide / standard delivery"
 
     class PaymentMethod(models.TextChoices):
@@ -1122,7 +1141,7 @@ class Order(models.Model):
         BANK_TRANSFER = "bank_transfer", "Bank transfer"
         # Reserved for later gateways
         STRIPE = "stripe", "Stripe"
-        JAZZCASH = "jazzcash", "JazzCash"
+        JAZZCASH = "jazzcash", "Mobile wallet (JazzCash / Easypaisa)"
 
     class CancelledBy(models.TextChoices):
         CUSTOMER = "customer", "Customer"
@@ -1140,6 +1159,11 @@ class Order(models.Model):
     status = models.CharField(
         max_length=32, choices=Status.choices, default=Status.PENDING
     )
+    payment_status = models.CharField(
+        max_length=32,
+        choices=PaymentStatus.choices,
+        default=PaymentStatus.UNPAID,
+    )
     fulfillment_type = models.CharField(
         max_length=32, choices=FulfillmentType.choices
     )
@@ -1152,12 +1176,20 @@ class Order(models.Model):
     )
     total = models.DecimalField(max_digits=12, decimal_places=2)
     delivery_address_text = models.TextField(blank=True)
+    delivery_house_number = models.CharField(max_length=40, blank=True, default="")
+    delivery_landmark = models.CharField(max_length=160, blank=True, default="")
     delivery_city = models.ForeignKey(
         City,
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
         related_name="orders",
+    )
+    customer_phone = models.CharField(
+        max_length=20,
+        blank=True,
+        default="",
+        help_text="Normalized Pakistani mobile (+923…) at place time.",
     )
     customer_notes = models.TextField(blank=True)
     # Snapshots of cancel policy at place time
@@ -1256,3 +1288,22 @@ class OrderPaymentProof(models.Model):
 
     def __str__(self) -> str:
         return f"PaymentProof<{self.order_id}:{self.id}>"
+
+
+class OrderProblemReport(models.Model):
+    """Customer-reported issue against an order (trust / support)."""
+
+    order = models.ForeignKey(
+        Order, on_delete=models.CASCADE, related_name="problem_reports"
+    )
+    user = models.ForeignKey(
+        User, on_delete=models.CASCADE, related_name="order_problem_reports"
+    )
+    message = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
+
+    def __str__(self) -> str:
+        return f"OrderProblemReport<{self.order_id}:{self.id}>"

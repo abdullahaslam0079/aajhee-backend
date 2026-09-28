@@ -613,11 +613,11 @@ class PhoneAuthSerializer(serializers.Serializer):
 
 
 class ConsumerProfileSerializer(serializers.Serializer):
-    """Consumer self-service profile. Phone/email are read-only; name is editable."""
+    """Consumer self-service profile. Email is read-only; name and phone are editable."""
 
     id = serializers.SerializerMethodField(read_only=True)
     email = serializers.EmailField(read_only=True)
-    phone = serializers.CharField(read_only=True, allow_null=True, required=False)
+    phone = serializers.CharField(required=False, allow_null=True, allow_blank=True)
     name = serializers.CharField(
         max_length=301,
         trim_whitespace=True,
@@ -644,14 +644,31 @@ class ConsumerProfileSerializer(serializers.Serializer):
             raise serializers.ValidationError("Full name is required.")
         return cleaned
 
+    def validate_phone(self, value: str | None) -> str | None:
+        if value is None or str(value).strip() == "":
+            return None
+        from .phone_utils import normalize_pakistani_mobile
+
+        return normalize_pakistani_mobile(value)
+
     def update(self, instance: User, validated_data: dict) -> User:
-        if "name" not in validated_data:
-            return instance
-        name = validated_data["name"]
-        first_name, _, last_name = name.partition(" ")
-        instance.first_name = first_name
-        instance.last_name = last_name
-        instance.save(update_fields=["first_name", "last_name"])
+        update_fields: list[str] = []
+        if "name" in validated_data:
+            name = validated_data["name"]
+            first_name, _, last_name = name.partition(" ")
+            instance.first_name = first_name
+            instance.last_name = last_name
+            update_fields.extend(["first_name", "last_name"])
+        if "phone" in validated_data:
+            phone = validated_data["phone"]
+            if phone and User.objects.filter(phone=phone).exclude(pk=instance.pk).exists():
+                raise serializers.ValidationError(
+                    {"phone": "This mobile number is already used by another account."}
+                )
+            instance.phone = phone
+            update_fields.append("phone")
+        if update_fields:
+            instance.save(update_fields=update_fields)
         return instance
 
 
@@ -700,6 +717,11 @@ class AddressSerializer(serializers.ModelSerializer):
         allow_blank=True,
         default="",
     )
+    landmark = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        default="",
+    )
     formattedAddress = serializers.CharField(source="formatted_address", read_only=True)
     latitude = serializers.FloatField(
         error_messages={
@@ -727,6 +749,7 @@ class AddressSerializer(serializers.ModelSerializer):
             "longitude",
             "isDefault",
             "deliveryInstructions",
+            "landmark",
             "formattedAddress",
         ]
 

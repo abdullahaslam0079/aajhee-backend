@@ -111,6 +111,7 @@ from .views_commerce import (
     ConsumerOrderCancelAPIView,
     ConsumerOrderDetailAPIView,
     ConsumerOrderListAPIView,
+    ConsumerOrderProblemReportAPIView,
     ConsumerPaymentProofAPIView,
     CountriesListAPIView,
     EnsureGeoSeedAPIView,
@@ -182,6 +183,11 @@ urlpatterns = [
         "orders/<uuid:public_id>/cancel",
         ConsumerOrderCancelAPIView.as_view(),
         name="consumer-order-cancel",
+    ),
+    path(
+        "orders/<uuid:public_id>/report",
+        ConsumerOrderProblemReportAPIView.as_view(),
+        name="consumer-order-report",
     ),
     path(
         "orders/<uuid:public_id>/payment-proof",

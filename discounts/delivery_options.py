@@ -6,7 +6,8 @@ from decimal import Decimal
 
 from django.utils import timezone
 
-from .location_utils import UserLocation, normalize_city
+from .launch_config import same_day_label
+from .location_utils import UserLocation, cities_match, normalize_city
 from .models import Branch, BranchFulfillmentSettings, Order
 from .visibility import is_near_branch
 
@@ -27,9 +28,16 @@ def get_or_create_fulfillment_settings(branch: Branch) -> BranchFulfillmentSetti
 
 
 def _same_city(branch: Branch, location: UserLocation) -> bool:
+    """True when customer and branch are in the same city (IDs or normalized names)."""
     if branch.city_ref_id and getattr(location, "city_id", None):
         return branch.city_ref_id == location.city_id
-    return normalize_city(branch.city) == location.city_normalized
+    branch_city = (branch.city or "").strip()
+    customer_city = (getattr(location, "city", None) or "").strip()
+    if not branch_city or not customer_city:
+        return False
+    return cities_match(branch_city, customer_city) or (
+        normalize_city(branch_city) == normalize_city(customer_city)
+    )
 
 
 def _same_country(branch: Branch, location: UserLocation) -> bool:
@@ -52,8 +60,12 @@ def resolve_delivery_options(
     options: list[DeliveryOption] = []
 
     near = bool(location and is_near_branch(branch, location))
-    same_city = bool(location and _same_city(branch, location))
     same_country = bool(location and _same_country(branch, location))
+    same_city = bool(location and _same_city(branch, location))
+    same_day_ok = settings.same_day_enabled and same_city
+    branch_city_name = (branch.city or "").strip() or (
+        branch.city_ref.name if branch.city_ref_id and branch.city_ref else ""
+    )
 
     options.append(
         DeliveryOption(
@@ -74,55 +86,36 @@ def resolve_delivery_options(
     options.append(
         DeliveryOption(
             fulfillment_type=Order.FulfillmentType.LOCAL_SAME_DAY,
-            label="Local / same-day delivery",
-            fee=settings.local_delivery_fee,
-            max_delivery_hours=settings.local_max_delivery_hours,
-            available=settings.local_same_day_enabled and same_city,
+            label=same_day_label(branch_city_name),
+            fee=settings.same_day_fee,
+            max_delivery_hours=settings.same_day_max_delivery_hours,
+            available=same_day_ok,
             reason=""
-            if settings.local_same_day_enabled and same_city
+            if same_day_ok
             else (
-                "Local delivery disabled"
-                if not settings.local_same_day_enabled
-                else "Available only in the branch city"
+                "Same-day delivery disabled"
+                if not settings.same_day_enabled
+                else "Same-day delivery is only available in the store's city"
             ),
         )
     )
+    nationwide_ok = settings.nationwide_enabled and same_country
     options.append(
         DeliveryOption(
             fulfillment_type=Order.FulfillmentType.NATIONWIDE,
             label="Nationwide / standard delivery",
             fee=settings.nationwide_delivery_fee,
             max_delivery_hours=settings.nationwide_max_delivery_hours,
-            available=settings.nationwide_enabled and same_country and not same_city,
+            available=nationwide_ok,
             reason=""
-            if settings.nationwide_enabled and same_country and not same_city
+            if nationwide_ok
             else (
                 "Nationwide delivery disabled"
                 if not settings.nationwide_enabled
-                else (
-                    "Use local delivery in this city"
-                    if same_city
-                    else "Outside delivery country"
-                )
+                else "Outside delivery country"
             ),
         )
     )
-    # If nationwide is enabled and local is unavailable, allow nationwide even in same city.
-    if settings.nationwide_enabled and same_country and same_city:
-        if not settings.local_same_day_enabled:
-            options = [
-                opt
-                if opt.fulfillment_type != Order.FulfillmentType.NATIONWIDE
-                else DeliveryOption(
-                    fulfillment_type=opt.fulfillment_type,
-                    label=opt.label,
-                    fee=opt.fee,
-                    max_delivery_hours=opt.max_delivery_hours,
-                    available=True,
-                    reason="",
-                )
-                for opt in options
-            ]
     return options
 
 

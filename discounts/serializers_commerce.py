@@ -109,17 +109,37 @@ class BranchContactSerializer(serializers.ModelSerializer):
 
 
 class BranchFulfillmentSettingsSerializer(serializers.ModelSerializer):
+    # CamelCase aliases for clients.
+    sameDayEnabled = serializers.BooleanField(
+        source="same_day_enabled", required=False
+    )
+    sameDayFee = serializers.DecimalField(
+        source="same_day_fee",
+        max_digits=10,
+        decimal_places=2,
+        required=False,
+    )
+    nationwideFee = serializers.DecimalField(
+        source="nationwide_delivery_fee",
+        max_digits=10,
+        decimal_places=2,
+        required=False,
+    )
+
     class Meta:
         model = BranchFulfillmentSettings
         fields = [
             "pickup_enabled",
             "pickup_radius_km",
-            "local_same_day_enabled",
-            "local_delivery_fee",
-            "local_max_delivery_hours",
+            "same_day_enabled",
+            "same_day_fee",
+            "same_day_max_delivery_hours",
             "nationwide_enabled",
             "nationwide_delivery_fee",
             "nationwide_max_delivery_hours",
+            "sameDayEnabled",
+            "sameDayFee",
+            "nationwideFee",
             "customer_cancel_policy",
             "customer_cancel_window_minutes",
             "bank_transfer_enabled",
@@ -506,15 +526,15 @@ class OrderSerializer(serializers.ModelSerializer):
     business_name = serializers.CharField(source="business.name", read_only=True)
     branch_name = serializers.CharField(source="branch.name", read_only=True)
     customer_name = serializers.SerializerMethodField()
-    customer_phone = serializers.CharField(
-        source="user.phone", read_only=True, allow_null=True
-    )
+    customer_phone = serializers.SerializerMethodField()
     customer_email = serializers.EmailField(
         source="user.email", read_only=True, allow_null=True
     )
     can_customer_cancel = serializers.SerializerMethodField()
     bank_transfer_instructions = serializers.SerializerMethodField()
     payment_instructions = serializers.SerializerMethodField()
+    store_phone = serializers.SerializerMethodField()
+    store_whatsapp = serializers.SerializerMethodField()
 
     class Meta:
         model = Order
@@ -526,16 +546,21 @@ class OrderSerializer(serializers.ModelSerializer):
             "branch_id",
             "branch_name",
             "status",
+            "payment_status",
             "fulfillment_type",
             "payment_method",
             "subtotal",
             "delivery_fee",
             "total",
             "delivery_address_text",
+            "delivery_house_number",
+            "delivery_landmark",
             "customer_notes",
             "customer_name",
             "customer_phone",
             "customer_email",
+            "store_phone",
+            "store_whatsapp",
             "customer_cancel_allowed",
             "customer_cancel_until",
             "can_customer_cancel",
@@ -557,6 +582,34 @@ class OrderSerializer(serializers.ModelSerializer):
             return ""
         full = f"{user.first_name or ''} {user.last_name or ''}".strip()
         return full or user.email or user.phone or ""
+
+    def get_customer_phone(self, obj: Order) -> str | None:
+        if obj.customer_phone:
+            return obj.customer_phone
+        return getattr(obj.user, "phone", None) if obj.user_id else None
+
+    def _primary_contact(self, obj: Order, contact_type: str) -> str | None:
+        contacts = list(obj.branch.contacts.all()) if obj.branch_id else []
+        preferred = [
+            c for c in contacts if c.contact_type == contact_type and c.is_primary
+        ]
+        pool = preferred or [c for c in contacts if c.contact_type == contact_type]
+        if not pool and contact_type == "whatsapp":
+            pool = [c for c in contacts if c.contact_type == "phone"]
+        if not pool:
+            return None
+        value = (pool[0].value or "").strip()
+        return value or None
+
+    def get_store_phone(self, obj: Order) -> str | None:
+        return self._primary_contact(obj, "phone") or self._primary_contact(
+            obj, "whatsapp"
+        )
+
+    def get_store_whatsapp(self, obj: Order) -> str | None:
+        return self._primary_contact(obj, "whatsapp") or self._primary_contact(
+            obj, "phone"
+        )
 
     def get_can_customer_cancel(self, obj: Order) -> bool:
         from .order_service import customer_can_cancel
@@ -596,6 +649,13 @@ class CheckoutGroupSerializer(serializers.Serializer):
     delivery_address_text = serializers.CharField(
         required=False, allow_blank=True, default=""
     )
+    delivery_house_number = serializers.CharField(
+        required=False, allow_blank=True, default=""
+    )
+    delivery_landmark = serializers.CharField(
+        required=False, allow_blank=True, default=""
+    )
+    customer_phone = serializers.CharField(required=False, allow_blank=True, default="")
 
 
 class CheckoutPreviewSerializer(serializers.Serializer):
@@ -605,6 +665,7 @@ class CheckoutPreviewSerializer(serializers.Serializer):
 
 class CheckoutPlaceSerializer(serializers.Serializer):
     groups = CheckoutGroupSerializer(many=True)
+    customer_phone = serializers.CharField(required=False, allow_blank=True, default="")
 
 
 class OrderStatusUpdateSerializer(serializers.Serializer):
@@ -625,6 +686,14 @@ class PaymentProofReviewSerializer(serializers.Serializer):
         ]
     )
     review_note = serializers.CharField(required=False, allow_blank=True, default="")
+
+
+class OrderProblemReportSerializer(serializers.Serializer):
+    message = serializers.CharField(min_length=5, max_length=2000)
+
+
+class OrderCancelSerializer(serializers.Serializer):
+    reason = serializers.CharField(required=False, allow_blank=True, default="")
 
 
 class DeliveryOptionsResponseSerializer(serializers.Serializer):

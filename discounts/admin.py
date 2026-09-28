@@ -27,6 +27,7 @@ from .models import (
     OfferScan,
     OfferViewEvent,
     Order,
+    OrderProblemReport,
     Product,
     User,
     UserPreferences,
@@ -353,14 +354,23 @@ class OrderAdmin(admin.ModelAdmin):
         "business",
         "branch",
         "status",
+        "payment_status",
         "fulfillment_type",
         "payment_method",
+        "customer_phone",
         "total",
         "placed_at",
     )
-    list_filter = ("status", "fulfillment_type", "payment_method")
-    search_fields = ("public_id", "business__name", "user__email")
+    list_filter = ("status", "payment_status", "fulfillment_type", "payment_method")
+    search_fields = ("public_id", "business__name", "user__email", "customer_phone")
     readonly_fields = ("public_id", "placed_at")
+
+
+@admin.register(OrderProblemReport)
+class OrderProblemReportAdmin(admin.ModelAdmin):
+    list_display = ("id", "order", "user", "created_at")
+    search_fields = ("order__public_id", "user__email", "message")
+    readonly_fields = ("created_at",)
 
 
 @admin.register(BranchContact)
@@ -374,7 +384,7 @@ class BranchFulfillmentSettingsAdmin(admin.ModelAdmin):
     list_display = (
         "branch",
         "pickup_enabled",
-        "local_same_day_enabled",
+        "same_day_enabled",
         "nationwide_enabled",
         "bank_transfer_enabled",
         "stripe_enabled",
