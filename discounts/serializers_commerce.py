@@ -20,6 +20,8 @@ from .models import (
     OrderPaymentProof,
     Product,
     ProductGalleryImage,
+    ProductReview,
+    ProductReviewImage,
 )
 from .offer_utils import build_media_url
 from .product_pricing import apply_discount_percent, apply_sale_price, clear_discount
@@ -204,6 +206,8 @@ class ProductSerializer(serializers.ModelSerializer):
     view_count = serializers.SerializerMethodField()
     like_count = serializers.SerializerMethodField()
     order_count = serializers.SerializerMethodField()
+    rating_avg = serializers.SerializerMethodField()
+    rating_count = serializers.SerializerMethodField()
     is_low_stock = serializers.SerializerMethodField()
 
     class Meta:
@@ -236,6 +240,8 @@ class ProductSerializer(serializers.ModelSerializer):
             "view_count",
             "like_count",
             "order_count",
+            "rating_avg",
+            "rating_count",
             "created_at",
             "updated_at",
         ]
@@ -265,6 +271,16 @@ class ProductSerializer(serializers.ModelSerializer):
     def get_order_count(self, obj: Product) -> int:
         stats = self._stats(obj)
         return stats.order_count if stats else 0
+
+    def get_rating_avg(self, obj: Product) -> str:
+        stats = self._stats(obj)
+        if not stats:
+            return "0.00"
+        return str(stats.rating_avg)
+
+    def get_rating_count(self, obj: Product) -> int:
+        stats = self._stats(obj)
+        return stats.rating_count if stats else 0
 
     def validate(self, attrs):
         base = attrs.get("base_price", getattr(self.instance, "base_price", None))
@@ -466,7 +482,123 @@ class CartSerializer(serializers.ModelSerializer):
         return str(total.quantize(Decimal("0.01")))
 
 
+class ProductReviewImageSerializer(serializers.ModelSerializer):
+    image_url = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ProductReviewImage
+        fields = ["id", "image_url", "sort_order"]
+
+    def get_image_url(self, obj: ProductReviewImage) -> str | None:
+        return build_media_url(self.context.get("request"), obj.image)
+
+
+class ProductReviewSerializer(serializers.ModelSerializer):
+    images = ProductReviewImageSerializer(many=True, read_only=True)
+    product_name = serializers.CharField(source="product.name", read_only=True)
+    product_id = serializers.IntegerField(source="product.id", read_only=True)
+    business_id = serializers.IntegerField(source="business.id", read_only=True)
+    business_name = serializers.CharField(source="business.name", read_only=True)
+    user_display_name = serializers.SerializerMethodField()
+    order_public_id = serializers.UUIDField(source="order.public_id", read_only=True)
+    order_item_id = serializers.IntegerField(read_only=True)
+    can_edit = serializers.SerializerMethodField()
+    verified_purchase = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ProductReview
+        fields = [
+            "id",
+            "product_id",
+            "product_name",
+            "business_id",
+            "business_name",
+            "order_public_id",
+            "order_item_id",
+            "rating",
+            "comment",
+            "status",
+            "images",
+            "user_display_name",
+            "merchant_reply",
+            "merchant_replied_at",
+            "flagged_at",
+            "flag_reason",
+            "verified_purchase",
+            "can_edit",
+            "edited_at",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = fields
+
+    def get_user_display_name(self, obj: ProductReview) -> str:
+        user = obj.user
+        full = f"{user.first_name or ''} {user.last_name or ''}".strip()
+        if full:
+            return full
+        if user.email:
+            local = user.email.split("@")[0]
+            if len(local) <= 2:
+                return local
+            return f"{local[0]}***{local[-1]}"
+        return "Customer"
+
+    def get_verified_purchase(self, obj: ProductReview) -> bool:
+        return True
+
+    def get_can_edit(self, obj: ProductReview) -> bool:
+        request = self.context.get("request")
+        if not request or not getattr(request.user, "is_authenticated", False):
+            return False
+        if request.user.id != obj.user_id:
+            return False
+        from .review_service import customer_can_edit
+
+        return customer_can_edit(obj)
+
+
+class ProductReviewCreateSerializer(serializers.Serializer):
+    rating = serializers.IntegerField(min_value=1, max_value=5)
+    comment = serializers.CharField(
+        required=False, allow_blank=True, max_length=1000, default=""
+    )
+    images = serializers.ListField(
+        child=serializers.ImageField(),
+        required=False,
+        allow_empty=True,
+        max_length=5,
+    )
+
+
+class ProductReviewUpdateSerializer(serializers.Serializer):
+    rating = serializers.IntegerField(min_value=1, max_value=5, required=False)
+    comment = serializers.CharField(
+        required=False, allow_blank=True, max_length=1000
+    )
+    images = serializers.ListField(
+        child=serializers.ImageField(),
+        required=False,
+        allow_empty=True,
+        max_length=5,
+    )
+    replace_images = serializers.BooleanField(required=False, default=False)
+
+
+class MerchantReviewReplySerializer(serializers.Serializer):
+    reply = serializers.CharField(min_length=1, max_length=1000)
+
+
+class MerchantReviewFlagSerializer(serializers.Serializer):
+    reason = serializers.CharField(
+        required=False, allow_blank=True, max_length=500, default=""
+    )
+
+
 class OrderItemSerializer(serializers.ModelSerializer):
+    review = serializers.SerializerMethodField()
+    can_review = serializers.SerializerMethodField()
+
     class Meta:
         model = OrderItem
         fields = [
@@ -478,7 +610,30 @@ class OrderItemSerializer(serializers.ModelSerializer):
             "unit_discount_percent",
             "quantity",
             "line_total",
+            "review",
+            "can_review",
         ]
+
+    def _order(self, obj: OrderItem) -> Order | None:
+        return getattr(obj, "order", None)
+
+    def get_review(self, obj: OrderItem):
+        try:
+            review = obj.review
+        except ProductReview.DoesNotExist:
+            return None
+        return ProductReviewSerializer(review, context=self.context).data
+
+    def get_can_review(self, obj: OrderItem) -> bool:
+        request = self.context.get("request")
+        order = self._order(obj)
+        if not request or not order or not getattr(request.user, "is_authenticated", False):
+            return False
+        from .review_service import can_review_order_item
+
+        return can_review_order_item(
+            user=request.user, order=order, order_item=obj
+        )
 
 
 class OrderDeliverySnapshotSerializer(serializers.ModelSerializer):

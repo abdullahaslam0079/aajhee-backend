@@ -262,7 +262,7 @@ def notify_customer_order_status(order: Order) -> Notification | None:
     try:
         status_label = order.get_status_display()
         store = order.business.name if order.business_id else "store"
-        return create_and_push_notification(
+        notification = create_and_push_notification(
             user_id=user_id,
             type=Notification.NotificationType.ORDER_STATUS_CHANGED,
             title=f"Order update · {status_label}",
@@ -278,8 +278,92 @@ def notify_customer_order_status(order: Order) -> Notification | None:
                 "route": f"/orders/{order.public_id}",
             },
         )
+        if order.status == Order.Status.COMPLETED:
+            notify_customer_rate_prompt(order)
+        return notification
     except Exception:
         logger.exception(
             "Failed to notify customer about order status for %s", order.public_id
+        )
+        return None
+
+
+def notify_customer_rate_prompt(order: Order) -> Notification | None:
+    """Prompt the customer to rate products after delivery."""
+    user_id = getattr(order, "user_id", None)
+    if not user_id:
+        return None
+    store = order.business.name if order.business_id else "the store"
+    try:
+        return create_and_push_notification(
+            user_id=user_id,
+            type=Notification.NotificationType.ORDER_RATE_PROMPT,
+            title="Rate your order",
+            body=f"How was your order from {store}? Tap to leave a rating.",
+            data={
+                "type": Notification.NotificationType.ORDER_RATE_PROMPT,
+                "order_public_id": str(order.public_id),
+                "order_id": str(order.public_id),
+                "business_id": order.business_id,
+                "branch_id": order.branch_id,
+                "route": f"/orders/{order.public_id}",
+            },
+        )
+    except Exception:
+        logger.exception(
+            "Failed to send rate prompt for order %s", order.public_id
+        )
+        return None
+
+
+def notify_business_new_review(review) -> Notification | None:
+    """Notify the merchant when a customer leaves a product review."""
+    owner_id = getattr(review.business, "owner_id", None)
+    if not owner_id:
+        return None
+    try:
+        stars = "★" * int(review.rating) + "☆" * (5 - int(review.rating))
+        return create_and_push_notification(
+            user_id=owner_id,
+            type=Notification.NotificationType.BUSINESS_NEW_REVIEW,
+            title="New product review",
+            body=f"{stars} · {review.product.name}",
+            data={
+                "type": Notification.NotificationType.BUSINESS_NEW_REVIEW,
+                "review_id": review.id,
+                "product_id": review.product_id,
+                "order_public_id": str(review.order.public_id),
+                "business_id": review.business_id,
+                "route": "/business/reviews",
+            },
+        )
+    except Exception:
+        logger.exception("Failed to notify business about review %s", review.id)
+        return None
+
+
+def notify_customer_review_reply(review) -> Notification | None:
+    """Notify the customer when a merchant replies to their review."""
+    user_id = getattr(review, "user_id", None)
+    if not user_id:
+        return None
+    store = review.business.name if review.business_id else "the store"
+    try:
+        return create_and_push_notification(
+            user_id=user_id,
+            type=Notification.NotificationType.REVIEW_MERCHANT_REPLY,
+            title=f"{store} replied to your review",
+            body=(review.merchant_reply or "")[:160],
+            data={
+                "type": Notification.NotificationType.REVIEW_MERCHANT_REPLY,
+                "review_id": review.id,
+                "product_id": review.product_id,
+                "business_id": review.business_id,
+                "route": f"/products/{review.product_id}",
+            },
+        )
+    except Exception:
+        logger.exception(
+            "Failed to notify customer about review reply %s", review.id
         )
         return None

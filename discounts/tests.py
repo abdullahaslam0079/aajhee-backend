@@ -1990,3 +1990,229 @@ class DealSourceAdminAPITests(APITestCase):
         self.assertEqual(synced.status_code, status.HTTP_200_OK, synced.data)
         mocked.assert_called_once()
         self.assertEqual(synced.data["result"]["created"], 1)
+
+
+class ProductReviewAPITests(APITestCase):
+    def setUp(self):
+        self.consumer = User.objects.create_user(
+            email="reviewer@example.com",
+            password="testpass123",
+            account_type=User.AccountType.CONSUMER,
+        )
+        self.other = User.objects.create_user(
+            email="other@example.com",
+            password="testpass123",
+            account_type=User.AccountType.CONSUMER,
+        )
+        self.owner = User.objects.create_user(
+            email="merchant@example.com",
+            password="testpass123",
+            account_type=User.AccountType.BUSINESS,
+        )
+        self.admin = User.objects.create_user(
+            email="admin-review@example.com",
+            password="testpass123",
+            is_staff=True,
+        )
+        self.category = Category.objects.create(name="Grocery")
+        self.business = Business.objects.create(
+            owner=self.owner,
+            name="Fresh Mart",
+            category=self.category,
+            verification_status=Business.VerificationStatus.VERIFIED,
+        )
+        self.branch = Branch.objects.create(
+            business=self.business,
+            name="Main",
+            street="Main",
+            house_number="1",
+            postal_code="10001",
+            city="Berlin",
+            latitude=Decimal("52.52"),
+            longitude=Decimal("13.40"),
+        )
+        from .models import Order, OrderItem, Product
+
+        self.product = Product.objects.create(
+            business=self.business,
+            category=self.category,
+            name="Mango Box",
+            base_price=Decimal("500.00"),
+        )
+        self.product.branches.add(self.branch)
+        self.order = Order.objects.create(
+            user=self.consumer,
+            business=self.business,
+            branch=self.branch,
+            status=Order.Status.COMPLETED,
+            payment_status=Order.PaymentStatus.PAID,
+            fulfillment_type=Order.FulfillmentType.PICKUP,
+            payment_method=Order.PaymentMethod.CASH_ON_PICKUP,
+            subtotal=Decimal("500.00"),
+            delivery_fee=Decimal("0.00"),
+            total=Decimal("500.00"),
+        )
+        self.item = OrderItem.objects.create(
+            order=self.order,
+            product=self.product,
+            product_name=self.product.name,
+            unit_base_price=Decimal("500.00"),
+            unit_sale_price=Decimal("500.00"),
+            quantity=1,
+            line_total=Decimal("500.00"),
+        )
+        self.pending_order = Order.objects.create(
+            user=self.consumer,
+            business=self.business,
+            branch=self.branch,
+            status=Order.Status.PENDING,
+            payment_status=Order.PaymentStatus.UNPAID,
+            fulfillment_type=Order.FulfillmentType.PICKUP,
+            payment_method=Order.PaymentMethod.CASH_ON_PICKUP,
+            subtotal=Decimal("500.00"),
+            delivery_fee=Decimal("0.00"),
+            total=Decimal("500.00"),
+        )
+        self.pending_item = OrderItem.objects.create(
+            order=self.pending_order,
+            product=self.product,
+            product_name=self.product.name,
+            unit_base_price=Decimal("500.00"),
+            unit_sale_price=Decimal("500.00"),
+            quantity=1,
+            line_total=Decimal("500.00"),
+        )
+
+    def test_cannot_review_before_completed(self):
+        self.client.force_authenticate(user=self.consumer)
+        response = self.client.post(
+            f"/api/orders/{self.pending_order.public_id}/items/{self.pending_item.id}/reviews",
+            {"rating": 5, "comment": "Too early"},
+            format="multipart",
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_create_review_updates_aggregates(self):
+        self.client.force_authenticate(user=self.consumer)
+        response = self.client.post(
+            f"/api/orders/{self.order.public_id}/items/{self.item.id}/reviews",
+            {"rating": 5, "comment": "Delicious"},
+            format="multipart",
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+        self.assertEqual(response.data["rating"], 5)
+        self.assertTrue(response.data["verified_purchase"])
+
+        product_detail = self.client.get(f"/api/products/{self.product.id}")
+        self.assertEqual(product_detail.status_code, status.HTTP_200_OK)
+        self.assertEqual(product_detail.data["rating_count"], 1)
+        self.assertEqual(product_detail.data["rating_avg"], "5.00")
+
+        from .models import BusinessEngagementStats, ProductEngagementStats
+
+        pstats = ProductEngagementStats.objects.get(product=self.product)
+        self.assertEqual(pstats.rating_count, 1)
+        self.assertEqual(str(pstats.rating_avg), "5.00")
+        bstats = BusinessEngagementStats.objects.get(business=self.business)
+        self.assertEqual(bstats.rating_count, 1)
+        self.assertEqual(str(bstats.rating_avg), "5.00")
+
+    def test_duplicate_review_rejected(self):
+        self.client.force_authenticate(user=self.consumer)
+        first = self.client.post(
+            f"/api/orders/{self.order.public_id}/items/{self.item.id}/reviews",
+            {"rating": 4},
+            format="multipart",
+        )
+        self.assertEqual(first.status_code, status.HTTP_201_CREATED, first.data)
+        second = self.client.post(
+            f"/api/orders/{self.order.public_id}/items/{self.item.id}/reviews",
+            {"rating": 3},
+            format="multipart",
+        )
+        self.assertEqual(second.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_order_detail_exposes_can_review(self):
+        self.client.force_authenticate(user=self.consumer)
+        detail = self.client.get(f"/api/orders/{self.order.public_id}")
+        self.assertEqual(detail.status_code, status.HTTP_200_OK)
+        item = detail.data["items"][0]
+        self.assertTrue(item["can_review"])
+        self.assertIsNone(item["review"])
+
+        self.client.post(
+            f"/api/orders/{self.order.public_id}/items/{self.item.id}/reviews",
+            {"rating": 5},
+            format="multipart",
+        )
+        detail2 = self.client.get(f"/api/orders/{self.order.public_id}")
+        item2 = detail2.data["items"][0]
+        self.assertFalse(item2["can_review"])
+        self.assertEqual(item2["review"]["rating"], 5)
+
+    def test_merchant_flag_stays_public_admin_hide_updates_avg(self):
+        self.client.force_authenticate(user=self.consumer)
+        created = self.client.post(
+            f"/api/orders/{self.order.public_id}/items/{self.item.id}/reviews",
+            {"rating": 2, "comment": "Not fresh"},
+            format="multipart",
+        )
+        review_id = created.data["id"]
+
+        self.client.force_authenticate(user=self.owner)
+        flagged = self.client.post(
+            f"/api/business/reviews/{review_id}/flag",
+            {"reason": "Unfair"},
+            format="json",
+        )
+        self.assertEqual(flagged.status_code, status.HTTP_200_OK, flagged.data)
+        self.assertEqual(flagged.data["status"], "flagged")
+
+        public = self.client.get(f"/api/products/{self.product.id}/reviews")
+        self.assertEqual(public.status_code, status.HTTP_200_OK)
+        self.assertEqual(public.data["count"], 1)
+
+        self.client.force_authenticate(user=self.admin)
+        hidden = self.client.post(f"/api/admin/reviews/{review_id}/hide")
+        self.assertEqual(hidden.status_code, status.HTTP_200_OK, hidden.data)
+        self.assertEqual(hidden.data["status"], "hidden")
+
+        public2 = self.client.get(f"/api/products/{self.product.id}/reviews")
+        self.assertEqual(public2.data["count"], 0)
+
+        from .models import ProductEngagementStats
+
+        pstats = ProductEngagementStats.objects.get(product=self.product)
+        self.assertEqual(pstats.rating_count, 0)
+        self.assertEqual(str(pstats.rating_avg), "0.00")
+
+        restored = self.client.post(f"/api/admin/reviews/{review_id}/restore")
+        self.assertEqual(restored.status_code, status.HTTP_200_OK)
+        pstats.refresh_from_db()
+        self.assertEqual(pstats.rating_count, 1)
+
+    def test_merchant_reply(self):
+        self.client.force_authenticate(user=self.consumer)
+        created = self.client.post(
+            f"/api/orders/{self.order.public_id}/items/{self.item.id}/reviews",
+            {"rating": 5, "comment": "Loved it"},
+            format="multipart",
+        )
+        review_id = created.data["id"]
+        self.client.force_authenticate(user=self.owner)
+        replied = self.client.post(
+            f"/api/business/reviews/{review_id}/reply",
+            {"reply": "Thanks for shopping with us!"},
+            format="json",
+        )
+        self.assertEqual(replied.status_code, status.HTTP_200_OK, replied.data)
+        self.assertIn("Thanks", replied.data["merchant_reply"])
+
+    def test_other_user_cannot_review(self):
+        self.client.force_authenticate(user=self.other)
+        response = self.client.post(
+            f"/api/orders/{self.order.public_id}/items/{self.item.id}/reviews",
+            {"rating": 1},
+            format="multipart",
+        )
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)

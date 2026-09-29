@@ -29,6 +29,8 @@ from .models import (
     Order,
     OrderProblemReport,
     Product,
+    ProductReview,
+    ProductReviewImage,
     User,
     UserPreferences,
 )
@@ -371,6 +373,35 @@ class OrderProblemReportAdmin(admin.ModelAdmin):
     list_display = ("id", "order", "user", "created_at")
     search_fields = ("order__public_id", "user__email", "message")
     readonly_fields = ("created_at",)
+
+
+class ProductReviewImageInline(admin.TabularInline):
+    model = ProductReviewImage
+    extra = 0
+    readonly_fields = ("image", "sort_order", "created_at")
+
+
+@admin.register(ProductReview)
+class ProductReviewAdmin(admin.ModelAdmin):
+    list_display = (
+        "id",
+        "product",
+        "business",
+        "user",
+        "rating",
+        "status",
+        "created_at",
+    )
+    list_filter = ("status", "rating")
+    search_fields = (
+        "product__name",
+        "business__name",
+        "user__email",
+        "comment",
+        "order__public_id",
+    )
+    readonly_fields = ("created_at", "updated_at", "edited_at", "flagged_at")
+    inlines = [ProductReviewImageInline]
 
 
 @admin.register(BranchContact)

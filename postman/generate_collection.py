@@ -317,11 +317,44 @@ collection = {
                     "GET",
                     "api/branch/{{branch_id}}/offers",
                 ),
+                req(
+                    "List Product Reviews",
+                    "GET",
+                    "api/products/{{product_id}}/reviews",
+                    query=[("page", "1"), ("sort", "newest")],
+                    description="Public published reviews for a product. sort=newest|highest|lowest",
+                ),
+                req(
+                    "List Business Reviews",
+                    "GET",
+                    "api/businesses/{{business_id}}/reviews",
+                    query=[("page", "1"), ("sort", "newest")],
+                    description="Public published reviews for a store.",
+                ),
             ],
         ),
         folder(
             "Consumer",
             [
+                req(
+                    "Create Order Item Review",
+                    "POST",
+                    "api/orders/{{order_public_id}}/items/{{order_item_id}}/reviews",
+                    body={"rating": 5, "comment": "Great product!"},
+                    auth_bearer="{{consumer_token}}",
+                    description=(
+                        "Verified purchase only — order must be completed (Delivered). "
+                        "Use form-data with images for photo uploads (max 5)."
+                    ),
+                ),
+                req(
+                    "Update Review",
+                    "PATCH",
+                    "api/reviews/{{review_id}}",
+                    body={"rating": 4, "comment": "Updated thoughts"},
+                    auth_bearer="{{consumer_token}}",
+                    description="Editable within 7 days of creation.",
+                ),
                 req(
                     "Get Offer Usage",
                     "GET",
@@ -521,6 +554,29 @@ collection = {
                     auth_bearer="{{business_token}}",
                 ),
                 req(
+                    "List Reviews",
+                    "GET",
+                    "api/business/reviews",
+                    query=[("status", ""), ("product_id", ""), ("flagged", "")],
+                    auth_bearer="{{business_token}}",
+                    description="Merchant review inbox. Optionally filter by status/product/flagged.",
+                ),
+                req(
+                    "Reply to Review",
+                    "POST",
+                    "api/business/reviews/{{review_id}}/reply",
+                    body={"reply": "Thank you for your feedback!"},
+                    auth_bearer="{{business_token}}",
+                ),
+                req(
+                    "Flag Review",
+                    "POST",
+                    "api/business/reviews/{{review_id}}/flag",
+                    body={"reason": "Abusive language"},
+                    auth_bearer="{{business_token}}",
+                    description="Flags for admin; review stays public until admin hides it.",
+                ),
+                req(
                     "List Offers",
                     "GET",
                     "api/business/offers",
@@ -692,6 +748,32 @@ collection = {
                         "Admin create online-only offer: is_online=true, "
                         "no branch_ids required."
                     ),
+                ),
+                req(
+                    "List Reviews",
+                    "GET",
+                    "api/admin/reviews",
+                    query=[("status", "flagged"), ("business_id", ""), ("product_id", "")],
+                    auth_bearer="{{admin_token}}",
+                    description="Moderation queue. Flagged reviews sort first.",
+                ),
+                req(
+                    "Hide Review",
+                    "POST",
+                    "api/admin/reviews/{{review_id}}/hide",
+                    auth_bearer="{{admin_token}}",
+                ),
+                req(
+                    "Restore Review",
+                    "POST",
+                    "api/admin/reviews/{{review_id}}/restore",
+                    auth_bearer="{{admin_token}}",
+                ),
+                req(
+                    "Dismiss Review Flag",
+                    "POST",
+                    "api/admin/reviews/{{review_id}}/dismiss-flag",
+                    auth_bearer="{{admin_token}}",
                 ),
             ],
             auth_bearer="{{admin_token}}",

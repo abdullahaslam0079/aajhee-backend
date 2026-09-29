@@ -213,6 +213,8 @@ class BusinessProfileSerializer(serializers.ModelSerializer):
     )
     phone = serializers.CharField(required=False, allow_blank=True, max_length=40)
     instagram_url = serializers.URLField(required=False, allow_blank=True, max_length=300)
+    rating_avg = serializers.SerializerMethodField()
+    rating_count = serializers.SerializerMethodField()
 
     class Meta:
         model = Business
@@ -237,6 +239,8 @@ class BusinessProfileSerializer(serializers.ModelSerializer):
             "notification_whatsapp",
             "is_paused",
             "business_hours",
+            "rating_avg",
+            "rating_count",
         ]
         read_only_fields = [
             "id",
@@ -246,6 +250,8 @@ class BusinessProfileSerializer(serializers.ModelSerializer):
             "cnic_image_url",
             "shop_photo_url",
             "verification_status",
+            "rating_avg",
+            "rating_count",
         ]
 
     def run_validation(self, data=serializers.empty):
@@ -292,6 +298,16 @@ class BusinessProfileSerializer(serializers.ModelSerializer):
 
     def get_shop_photo_url(self, obj: Business) -> str | None:
         return build_media_url(self.context.get("request"), obj.shop_photo)
+
+    def get_rating_avg(self, obj: Business) -> str:
+        stats = getattr(obj, "engagement_stats", None)
+        if not stats:
+            return "0.00"
+        return str(stats.rating_avg)
+
+    def get_rating_count(self, obj: Business) -> int:
+        stats = getattr(obj, "engagement_stats", None)
+        return stats.rating_count if stats else 0
 
     def to_representation(self, instance):
         data = super().to_representation(instance)

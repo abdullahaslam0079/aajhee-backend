@@ -122,6 +122,19 @@ from .views_commerce import (
     ProductViewAPIView,
     StoreCatalogAPIView,
 )
+from .views_reviews import (
+    AdminReviewDismissFlagAPIView,
+    AdminReviewHideAPIView,
+    AdminReviewListAPIView,
+    AdminReviewRestoreAPIView,
+    BusinessReviewFlagAPIView,
+    BusinessReviewListAPIView,
+    BusinessReviewListPublicAPIView,
+    BusinessReviewReplyAPIView,
+    ConsumerOrderItemReviewCreateAPIView,
+    ConsumerReviewUpdateAPIView,
+    ProductReviewListAPIView,
+)
 
 urlpatterns = [
     path("categories", CategoriesListAPIView.as_view(), name="categories"),
@@ -143,6 +156,21 @@ urlpatterns = [
         "products/<int:product_id>/like",
         ProductLikeAPIView.as_view(),
         name="product-like",
+    ),
+    path(
+        "products/<int:product_id>/reviews",
+        ProductReviewListAPIView.as_view(),
+        name="product-reviews",
+    ),
+    path(
+        "businesses/<int:business_id>/reviews",
+        BusinessReviewListPublicAPIView.as_view(),
+        name="business-reviews-public",
+    ),
+    path(
+        "reviews/<int:review_id>",
+        ConsumerReviewUpdateAPIView.as_view(),
+        name="consumer-review-update",
     ),
     path("feeds/home", HomeFeedsAPIView.as_view(), name="feeds-home"),
     path(
@@ -193,6 +221,11 @@ urlpatterns = [
         "orders/<uuid:public_id>/payment-proof",
         ConsumerPaymentProofAPIView.as_view(),
         name="consumer-payment-proof",
+    ),
+    path(
+        "orders/<uuid:public_id>/items/<int:item_id>/reviews",
+        ConsumerOrderItemReviewCreateAPIView.as_view(),
+        name="consumer-order-item-review",
     ),
     path("offers", OffersListAPIView.as_view(), name="offers"),
     path("offers/search", OfferSearchAPIView.as_view(), name="offers-search"),
@@ -361,6 +394,21 @@ urlpatterns = [
         "business/products/<int:product_id>/gallery/<int:image_id>",
         BusinessProductGalleryDeleteAPIView.as_view(),
         name="business-product-gallery-delete",
+    ),
+    path(
+        "business/reviews",
+        BusinessReviewListAPIView.as_view(),
+        name="business-reviews",
+    ),
+    path(
+        "business/reviews/<int:review_id>/reply",
+        BusinessReviewReplyAPIView.as_view(),
+        name="business-review-reply",
+    ),
+    path(
+        "business/reviews/<int:review_id>/flag",
+        BusinessReviewFlagAPIView.as_view(),
+        name="business-review-flag",
     ),
     path(
         "business/orders",
@@ -552,6 +600,22 @@ urlpatterns = [
         "admin/orders/<uuid:public_id>/payment-proofs/<int:proof_id>/review",
         AdminPaymentProofReviewAPIView.as_view(),
         name="admin-payment-proof-review",
+    ),
+    path("admin/reviews", AdminReviewListAPIView.as_view(), name="admin-reviews"),
+    path(
+        "admin/reviews/<int:review_id>/hide",
+        AdminReviewHideAPIView.as_view(),
+        name="admin-review-hide",
+    ),
+    path(
+        "admin/reviews/<int:review_id>/restore",
+        AdminReviewRestoreAPIView.as_view(),
+        name="admin-review-restore",
+    ),
+    path(
+        "admin/reviews/<int:review_id>/dismiss-flag",
+        AdminReviewDismissFlagAPIView.as_view(),
+        name="admin-review-dismiss-flag",
     ),
     path("admin/users", AdminUserListAPIView.as_view(), name="admin-users"),
     path(

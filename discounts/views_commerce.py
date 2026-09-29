@@ -23,12 +23,14 @@ from .models import (
     City,
     Country,
     Order,
+    OrderItem,
     OrderPaymentProof,
     OrderProblemReport,
     Product,
     ProductEngagementStats,
     ProductGalleryImage,
     ProductLike,
+    ProductReview,
     ProductViewEvent,
 )
 from .order_service import (
@@ -266,12 +268,14 @@ class StoreCatalogAPIView(ProductsFeedMixin, APIView):
         location = self.get_user_location()
         if branch_id:
             branch = get_object_or_404(
-                Branch.objects.select_related("business").prefetch_related("contacts"),
+                Branch.objects.select_related("business", "business__engagement_stats").prefetch_related("contacts"),
                 pk=branch_id,
             )
             business = branch.business
         else:
-            business = get_object_or_404(Business, pk=business_id)
+            business = get_object_or_404(
+                Business.objects.select_related("engagement_stats"), pk=business_id
+            )
             branch = business.branches.order_by("id").first()
 
         channels = resolve_business_visibility(business, location)
@@ -318,6 +322,22 @@ class StoreCatalogAPIView(ProductsFeedMixin, APIView):
                     "online_coverage": business.online_coverage,
                     "show_online": channels.show_online,
                     "show_instore": channels.show_instore,
+                    "rating_avg": str(
+                        getattr(
+                            getattr(business, "engagement_stats", None),
+                            "rating_avg",
+                            "0.00",
+                        )
+                        or "0.00"
+                    ),
+                    "rating_count": int(
+                        getattr(
+                            getattr(business, "engagement_stats", None),
+                            "rating_count",
+                            0,
+                        )
+                        or 0
+                    ),
                 },
                 "branch": (
                     {
@@ -554,7 +574,12 @@ class ConsumerOrderDetailAPIView(generics.RetrieveAPIView):
             Order.objects.filter(user=self.request.user)
             .select_related("business", "branch", "user")
             .prefetch_related(
-                "items",
+                Prefetch(
+                    "items",
+                    queryset=OrderItem.objects.select_related("product").prefetch_related(
+                        "review__images"
+                    ),
+                ),
                 "payment_proofs",
                 "delivery_snapshot",
                 "branch__contacts",
@@ -1006,6 +1031,9 @@ class BusinessStatsAPIView(APIView):
 
     def get(self, request):
         business = request.user.business_profile
+        from .review_service import ensure_business_engagement_stats
+
+        biz_stats = ensure_business_engagement_stats(business)
         orders = Order.objects.filter(business=business).exclude(
             status=Order.Status.CANCELLED
         )
@@ -1066,6 +1094,8 @@ class BusinessStatsAPIView(APIView):
                     stock_quantity__lte=ProductSerializer.LOW_STOCK_THRESHOLD,
                 ).count(),
                 "low_stock_threshold": ProductSerializer.LOW_STOCK_THRESHOLD,
+                "rating_avg": str(biz_stats.rating_avg),
+                "rating_count": biz_stats.rating_count,
             }
         )
 

@@ -699,6 +699,10 @@ class BusinessEngagementStats(models.Model):
     )
     view_count = models.PositiveIntegerField(default=0)
     like_count = models.PositiveIntegerField(default=0)
+    rating_avg = models.DecimalField(
+        max_digits=3, decimal_places=2, default=Decimal("0.00")
+    )
+    rating_count = models.PositiveIntegerField(default=0)
 
     def __str__(self) -> str:
         return f"BusinessStats<{self.business_id}>"
@@ -852,6 +856,18 @@ class Notification(models.Model):
         ORDER_STATUS_CHANGED = (
             "order_status_changed",
             "Order status changed",
+        )
+        ORDER_RATE_PROMPT = (
+            "order_rate_prompt",
+            "Order rate prompt",
+        )
+        BUSINESS_NEW_REVIEW = (
+            "business_new_review",
+            "Business new review",
+        )
+        REVIEW_MERCHANT_REPLY = (
+            "review_merchant_reply",
+            "Review merchant reply",
         )
         GENERIC = ("generic", "Generic")
 
@@ -1076,6 +1092,10 @@ class ProductEngagementStats(models.Model):
     view_count = models.PositiveIntegerField(default=0)
     like_count = models.PositiveIntegerField(default=0)
     order_count = models.PositiveIntegerField(default=0)
+    rating_avg = models.DecimalField(
+        max_digits=3, decimal_places=2, default=Decimal("0.00")
+    )
+    rating_count = models.PositiveIntegerField(default=0)
 
     def __str__(self) -> str:
         return f"ProductStats<{self.product_id}>"
@@ -1359,3 +1379,80 @@ class OrderProblemReport(models.Model):
 
     def __str__(self) -> str:
         return f"OrderProblemReport<{self.order_id}:{self.id}>"
+
+
+class ProductReview(models.Model):
+    """Verified-purchase product review (one per delivered order line item)."""
+
+    class Status(models.TextChoices):
+        PUBLISHED = "published", "Published"
+        HIDDEN = "hidden", "Hidden"
+        FLAGGED = "flagged", "Flagged"
+
+    user = models.ForeignKey(
+        User, on_delete=models.CASCADE, related_name="product_reviews"
+    )
+    business = models.ForeignKey(
+        Business, on_delete=models.CASCADE, related_name="product_reviews"
+    )
+    product = models.ForeignKey(
+        Product, on_delete=models.CASCADE, related_name="reviews"
+    )
+    order = models.ForeignKey(
+        Order, on_delete=models.CASCADE, related_name="product_reviews"
+    )
+    order_item = models.OneToOneField(
+        OrderItem,
+        on_delete=models.CASCADE,
+        related_name="review",
+    )
+    rating = models.PositiveSmallIntegerField()
+    comment = models.TextField(blank=True, max_length=1000)
+    status = models.CharField(
+        max_length=16,
+        choices=Status.choices,
+        default=Status.PUBLISHED,
+        db_index=True,
+    )
+    merchant_reply = models.TextField(blank=True, max_length=1000)
+    merchant_replied_at = models.DateTimeField(null=True, blank=True)
+    flagged_at = models.DateTimeField(null=True, blank=True)
+    flag_reason = models.TextField(blank=True, max_length=500)
+    edited_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
+        indexes = [
+            models.Index(fields=["product", "status", "-created_at"]),
+            models.Index(fields=["business", "status", "-created_at"]),
+        ]
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(rating__gte=1, rating__lte=5),
+                name="product_review_rating_range",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"ProductReview<{self.id}:{self.product_id}:{self.rating}>"
+
+    @property
+    def is_publicly_visible(self) -> bool:
+        return self.status in (self.Status.PUBLISHED, self.Status.FLAGGED)
+
+
+class ProductReviewImage(models.Model):
+    review = models.ForeignKey(
+        ProductReview, on_delete=models.CASCADE, related_name="images"
+    )
+    image = models.ImageField(upload_to="review_images/")
+    sort_order = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["sort_order", "id"]
+
+    def __str__(self) -> str:
+        return f"ProductReviewImage<{self.review_id}:{self.id}>"
