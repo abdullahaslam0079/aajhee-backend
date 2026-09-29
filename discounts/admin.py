@@ -7,6 +7,7 @@ from django.db.models import Count, Q
 
 from .models import (
     Address,
+    AuditLog,
     Branch,
     BranchContact,
     BranchFulfillmentSettings,
@@ -28,6 +29,8 @@ from .models import (
     OfferViewEvent,
     Order,
     OrderProblemReport,
+    OrderProblemReportNote,
+    OrderStatusHistory,
     Product,
     ProductReview,
     ProductReviewImage,
@@ -58,17 +61,18 @@ class UserAdmin(BaseUserAdmin):
         "email",
         "phone",
         "account_type",
+        "admin_role",
         "is_staff",
         "is_active",
         "is_superuser",
     )
     search_fields = ("email", "phone", "firebase_uid")
-    list_filter = ("account_type", "is_staff", "is_superuser", "is_active")
+    list_filter = ("account_type", "admin_role", "is_staff", "is_superuser", "is_active")
 
     fieldsets = (
         (None, {"fields": ("email", "password")}),
         ("Phone auth", {"fields": ("phone", "firebase_uid")}),
-        ("Account", {"fields": ("account_type",)}),
+        ("Account", {"fields": ("account_type", "admin_role")}),
         (
             "Permissions",
             {
@@ -370,8 +374,32 @@ class OrderAdmin(admin.ModelAdmin):
 
 @admin.register(OrderProblemReport)
 class OrderProblemReportAdmin(admin.ModelAdmin):
-    list_display = ("id", "order", "user", "created_at")
+    list_display = ("id", "order", "user", "status", "created_at")
+    list_filter = ("status",)
     search_fields = ("order__public_id", "user__email", "message")
+    readonly_fields = ("created_at", "updated_at")
+
+
+@admin.register(OrderProblemReportNote)
+class OrderProblemReportNoteAdmin(admin.ModelAdmin):
+    list_display = ("id", "report", "author", "created_at")
+    search_fields = ("body", "report__id", "author__email")
+    readonly_fields = ("created_at",)
+
+
+@admin.register(OrderStatusHistory)
+class OrderStatusHistoryAdmin(admin.ModelAdmin):
+    list_display = ("id", "order", "from_status", "to_status", "actor", "created_at")
+    list_filter = ("to_status",)
+    search_fields = ("order__public_id", "note")
+    readonly_fields = ("created_at",)
+
+
+@admin.register(AuditLog)
+class AuditLogAdmin(admin.ModelAdmin):
+    list_display = ("id", "action", "target_type", "target_id", "actor", "created_at")
+    list_filter = ("action", "target_type")
+    search_fields = ("action", "target_id", "actor__email")
     readonly_fields = ("created_at",)
 
 

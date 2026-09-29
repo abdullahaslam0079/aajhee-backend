@@ -354,3 +354,10 @@ FIREBASE_CREDENTIALS_PATH = os.environ.get("FIREBASE_CREDENTIALS_PATH", "")
 # Without GEMINI_API_KEY, import returns scrape-only drafts (unchanged behavior).
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash").strip() or "gemini-2.0-flash"
+
+# Feature flag: hide offers surfaces when false (code retained).
+OFFERS_ENABLED = os.environ.get("OFFERS_ENABLED", "false").lower() in (
+    "true",
+    "1",
+    "yes",
+)

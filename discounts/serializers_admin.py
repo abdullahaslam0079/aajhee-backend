@@ -7,7 +7,20 @@ from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 
-from .models import Branch, Business, Category, DealSource, Offer, OfferViewEvent
+from .models import (
+    AuditLog,
+    Branch,
+    Business,
+    Category,
+    City,
+    Country,
+    DealSource,
+    Offer,
+    OfferViewEvent,
+    Order,
+    OrderProblemReport,
+    OrderProblemReportNote,
+)
 from .serializers_business import (
     BranchSerializer,
     BusinessOfferSerializer,
@@ -16,6 +29,16 @@ from .serializers_business import (
 )
 
 User = get_user_model()
+
+PHONE_LOCAL_EMAIL_SUFFIX = "@phone.aajhee.local"
+
+
+def display_email_for_user(email: str | None) -> str | None:
+    if not email:
+        return None
+    if email.lower().endswith(PHONE_LOCAL_EMAIL_SUFFIX):
+        return None
+    return email
 
 
 class AdminProfileSerializer(serializers.ModelSerializer):
@@ -28,6 +51,7 @@ class AdminProfileSerializer(serializers.ModelSerializer):
             "last_name",
             "is_staff",
             "is_superuser",
+            "admin_role",
             "date_joined",
         ]
         read_only_fields = fields
@@ -88,12 +112,19 @@ class AdminCategorySerializer(serializers.ModelSerializer):
 class AdminUserSerializer(serializers.ModelSerializer):
     business_id = serializers.SerializerMethodField()
     business_name = serializers.SerializerMethodField()
+    email = serializers.SerializerMethodField()
+    display_email = serializers.SerializerMethodField()
+    phone = serializers.CharField(read_only=True, allow_null=True)
+    order_count = serializers.SerializerMethodField()
+    last_order_at = serializers.SerializerMethodField()
 
     class Meta:
         model = User
         fields = [
             "id",
             "email",
+            "display_email",
+            "phone",
             "first_name",
             "last_name",
             "account_type",
@@ -104,20 +135,16 @@ class AdminUserSerializer(serializers.ModelSerializer):
             "last_login",
             "business_id",
             "business_name",
+            "order_count",
+            "last_order_at",
         ]
-        read_only_fields = [
-            "id",
-            "email",
-            "first_name",
-            "last_name",
-            "account_type",
-            "is_staff",
-            "is_superuser",
-            "date_joined",
-            "last_login",
-            "business_id",
-            "business_name",
-        ]
+        read_only_fields = fields
+
+    def get_email(self, obj: User) -> str | None:
+        return display_email_for_user(obj.email)
+
+    def get_display_email(self, obj: User) -> str | None:
+        return display_email_for_user(obj.email)
 
     def get_business_id(self, obj: User) -> int | None:
         profile = getattr(obj, "business_profile", None)
@@ -126,6 +153,23 @@ class AdminUserSerializer(serializers.ModelSerializer):
     def get_business_name(self, obj: User) -> str | None:
         profile = getattr(obj, "business_profile", None)
         return profile.name if profile else None
+
+    def get_order_count(self, obj: User) -> int:
+        annotated = getattr(obj, "annotated_order_count", None)
+        if annotated is not None:
+            return int(annotated)
+        return Order.objects.filter(user=obj).count()
+
+    def get_last_order_at(self, obj: User):
+        annotated = getattr(obj, "annotated_last_order_at", None)
+        if annotated is not None or hasattr(obj, "annotated_last_order_at"):
+            return annotated
+        return (
+            Order.objects.filter(user=obj)
+            .order_by("-placed_at")
+            .values_list("placed_at", flat=True)
+            .first()
+        )
 
 
 class AdminUserUpdateSerializer(serializers.ModelSerializer):
@@ -144,6 +188,7 @@ class AdminBusinessSerializer(BusinessProfileSerializer):
     redemption_count = serializers.SerializerMethodField()
     view_count = serializers.SerializerMethodField()
     like_count = serializers.SerializerMethodField()
+    verification_checklist = serializers.SerializerMethodField()
     verification_status = serializers.ChoiceField(
         choices=Business.VerificationStatus.choices,
         required=False,
@@ -160,6 +205,7 @@ class AdminBusinessSerializer(BusinessProfileSerializer):
             "redemption_count",
             "view_count",
             "like_count",
+            "verification_checklist",
         ]
         read_only_fields = [
             field
@@ -175,6 +221,7 @@ class AdminBusinessSerializer(BusinessProfileSerializer):
             "redemption_count",
             "view_count",
             "like_count",
+            "verification_checklist",
         ]
 
     def get_branch_count(self, obj: Business) -> int:
@@ -188,6 +235,15 @@ class AdminBusinessSerializer(BusinessProfileSerializer):
 
     def get_redemption_count(self, obj: Business) -> int:
         return int(getattr(obj, "annotated_redemption_count", 0) or 0)
+
+    def get_verification_checklist(self, obj: Business) -> dict:
+        return {
+            "phone": bool((obj.phone or "").strip()),
+            "notification_whatsapp": bool((obj.notification_whatsapp or "").strip()),
+            "cnic_image": bool(obj.cnic_image),
+            "shop_photo_or_instagram": bool(obj.shop_photo)
+            or bool((obj.instagram_url or "").strip()),
+        }
 
     def _engagement_stats(self, obj: Business):
         try:
@@ -205,12 +261,51 @@ class AdminBusinessSerializer(BusinessProfileSerializer):
         stats = self._engagement_stats(obj)
         return stats.like_count if stats else 0
 
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        # CNIC / shop photos are private — use signed URL endpoint, not public media URLs.
+        data["cnic_image_url"] = None
+        data["shop_photo_url"] = None
+        data["has_cnic_image"] = bool(instance.cnic_image)
+        data["has_shop_photo"] = bool(instance.shop_photo)
+        return data
+
 
 class AdminBusinessCreateSerializer(BusinessRegisterSerializer):
-    """Creates owner + business from admin panel (same shape as merchant register)."""
+    """Creates owner + business from admin panel — stays UNDER_REVIEW until verified."""
 
     phone = serializers.CharField(required=False, allow_blank=True, max_length=40)
+    notification_whatsapp = serializers.CharField(
+        required=False, allow_blank=True, max_length=40
+    )
     instagram_url = serializers.URLField(required=False, allow_blank=True, max_length=300)
+    primary_city_id = serializers.PrimaryKeyRelatedField(
+        queryset=City.objects.all(),
+        source="primary_city",
+        required=False,
+        allow_null=True,
+    )
+    primary_country_id = serializers.PrimaryKeyRelatedField(
+        queryset=Country.objects.all(),
+        source="primary_country",
+        required=False,
+        allow_null=True,
+    )
+    # Free-text city from admin create form (resolved to City row).
+    primary_city_name = serializers.CharField(
+        required=False, allow_blank=True, max_length=80, write_only=True
+    )
+    address_text = serializers.CharField(
+        required=False, allow_blank=True, max_length=500, write_only=True
+    )
+
+    def validate_phone(self, value: str) -> str:
+        phone = (value or "").strip()
+        if not phone:
+            return ""
+        if len(phone) < 7:
+            raise serializers.ValidationError("Enter a valid phone number.")
+        return phone
 
     def validate(self, attrs):
         if attrs["password"] != attrs["password_confirm"]:
@@ -221,13 +316,162 @@ class AdminBusinessCreateSerializer(BusinessRegisterSerializer):
             validate_password(attrs["password"])
         except DjangoValidationError as exc:
             raise serializers.ValidationError({"password": list(exc.messages)}) from exc
+        # Admin create may omit CNIC/shop (merchant register still requires them).
         return attrs
 
     def create(self, validated_data):
+        primary_city = validated_data.pop("primary_city", None)
+        primary_country = validated_data.pop("primary_country", None)
+        notification_whatsapp = validated_data.pop("notification_whatsapp", None)
+        city_name = (validated_data.pop("primary_city_name", None) or "").strip()
+        validated_data.pop("address_text", None)  # stored on branches, not Business
+        # Alias from multipart form field "primary_city" as plain text.
+        if not primary_city and not city_name:
+            raw = self.initial_data.get("primary_city") if hasattr(self, "initial_data") else None
+            if isinstance(raw, str) and raw.strip() and not str(raw).isdigit():
+                city_name = raw.strip()
+        if not primary_city and city_name:
+            from .geo_utils import get_or_create_city
+
+            primary_city = get_or_create_city(city_name)
         business = super().create(validated_data)
-        business.verification_status = Business.VerificationStatus.VERIFIED
-        business.save(update_fields=["verification_status"])
+        # Keep UNDER_REVIEW (do not auto-verify).
+        update_fields = []
+        if primary_city is not None:
+            business.primary_city = primary_city
+            update_fields.append("primary_city")
+            if primary_country is None and getattr(primary_city, "country_id", None):
+                business.primary_country = primary_city.country
+                update_fields.append("primary_country")
+        if primary_country is not None:
+            business.primary_country = primary_country
+            if "primary_country" not in update_fields:
+                update_fields.append("primary_country")
+        if notification_whatsapp is not None:
+            business.notification_whatsapp = notification_whatsapp
+            update_fields.append("notification_whatsapp")
+        if update_fields:
+            business.save(update_fields=update_fields)
         return business
+
+
+class AdminReportNoteSerializer(serializers.ModelSerializer):
+    author_email = serializers.SerializerMethodField()
+
+    class Meta:
+        model = OrderProblemReportNote
+        fields = ["id", "body", "author_id", "author_email", "created_at"]
+        read_only_fields = fields
+
+    def get_author_email(self, obj: OrderProblemReportNote) -> str | None:
+        if not obj.author_id:
+            return None
+        return display_email_for_user(obj.author.email)
+
+
+class AdminReportNoteCreateSerializer(serializers.Serializer):
+    body = serializers.CharField(min_length=1, max_length=5000)
+
+
+class AdminReportResolveSerializer(serializers.Serializer):
+    resolution_note = serializers.CharField(min_length=1, max_length=5000)
+
+
+class AdminReportStatusSerializer(serializers.Serializer):
+    status = serializers.ChoiceField(choices=OrderProblemReport.Status.choices)
+
+
+class AdminReportListSerializer(serializers.ModelSerializer):
+    order_public_id = serializers.UUIDField(source="order.public_id", read_only=True)
+    business_id = serializers.IntegerField(source="order.business_id", read_only=True)
+    business_name = serializers.CharField(source="order.business.name", read_only=True)
+    user_email = serializers.SerializerMethodField()
+    user_phone = serializers.CharField(source="user.phone", read_only=True, allow_null=True)
+    notes_count = serializers.SerializerMethodField()
+
+    class Meta:
+        model = OrderProblemReport
+        fields = [
+            "id",
+            "order_id",
+            "order_public_id",
+            "business_id",
+            "business_name",
+            "user_id",
+            "user_email",
+            "user_phone",
+            "message",
+            "status",
+            "resolution_note",
+            "resolved_at",
+            "notes_count",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = fields
+
+    def get_user_email(self, obj: OrderProblemReport) -> str | None:
+        return display_email_for_user(getattr(obj.user, "email", None))
+
+    def get_notes_count(self, obj: OrderProblemReport) -> int:
+        return obj.notes.count()
+
+
+class AdminReportDetailSerializer(AdminReportListSerializer):
+    notes = AdminReportNoteSerializer(many=True, read_only=True)
+    resolved_by_email = serializers.SerializerMethodField()
+
+    class Meta(AdminReportListSerializer.Meta):
+        fields = AdminReportListSerializer.Meta.fields + [
+            "notes",
+            "resolved_by",
+            "resolved_by_email",
+        ]
+
+    def get_resolved_by_email(self, obj: OrderProblemReport) -> str | None:
+        if not obj.resolved_by_id:
+            return None
+        return display_email_for_user(obj.resolved_by.email)
+
+
+class AdminAuditLogSerializer(serializers.ModelSerializer):
+    actor_email = serializers.SerializerMethodField()
+
+    class Meta:
+        model = AuditLog
+        fields = [
+            "id",
+            "actor_id",
+            "actor_email",
+            "action",
+            "target_type",
+            "target_id",
+            "metadata",
+            "created_at",
+        ]
+        read_only_fields = fields
+
+    def get_actor_email(self, obj: AuditLog) -> str | None:
+        if not obj.actor_id:
+            return None
+        return display_email_for_user(obj.actor.email)
+
+
+class AdminVerifyBusinessSerializer(serializers.Serializer):
+    action = serializers.ChoiceField(choices=["approve", "reject"])
+    reason = serializers.CharField(required=False, allow_blank=True, default="")
+
+
+class AdminOrderPatchSerializer(serializers.Serializer):
+    admin_note = serializers.CharField(required=False, allow_blank=True)
+    is_escalated = serializers.BooleanField(required=False)
+
+    def validate(self, attrs):
+        if not attrs:
+            raise serializers.ValidationError(
+                "Provide admin_note and/or is_escalated."
+            )
+        return attrs
 
 
 class AdminBranchSerializer(BranchSerializer):

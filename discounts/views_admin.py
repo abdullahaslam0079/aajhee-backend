@@ -1,7 +1,9 @@
 from datetime import timedelta
+from decimal import Decimal
 
+from django.conf import settings as django_settings
 from django.contrib.auth import get_user_model
-from django.db.models import Count, Q, Sum, TextField
+from django.db.models import Count, Max, Q, Sum, TextField
 from django.db.models.functions import Cast, TruncDate
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
@@ -13,6 +15,7 @@ from rest_framework.views import APIView
 from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.views import TokenObtainPairView
 
+from .audit_utils import write_audit
 from .auth_utils import blacklist_user_tokens, logout_response_message
 from .delivery_options import get_or_create_fulfillment_settings
 from .models import (
@@ -29,13 +32,23 @@ from .models import (
     OfferScan,
     OfferViewEvent,
     Order,
+    OrderItem,
     OrderPaymentProof,
+    OrderProblemReport,
+    OrderStatusHistory,
     Product,
 )
-from .notification_utils import notify_favorited_business_new_offer
+from .notification_utils import (
+    notify_favorited_business_new_offer,
+    notify_merchant_verification,
+)
 from .offer_sync import sync_deal_source
 from .offer_utils import branch_highlight_queryset
-from .permissions import IsAdminAccount
+from .permissions import (
+    IsAdminAccount,
+    admin_can_mutate_platform,
+    deny_support_write,
+)
 from .serializers_admin import (
     AdminBranchSerializer,
     AdminBusinessCreateSerializer,
@@ -72,10 +85,12 @@ def _paginate(queryset, request, serializer_class, context=None):
     )
 
 
-def _business_queryset():
+def _business_queryset(*, include_deleted: bool = False):
+    qs = Business.objects.select_related("owner", "category", "engagement_stats")
+    if not include_deleted:
+        qs = qs.filter(deleted_at__isnull=True)
     return (
-        Business.objects.select_related("owner", "category", "engagement_stats")
-        .annotate(
+        qs.annotate(
             annotated_branch_count=Count("branches", distinct=True),
             annotated_offer_count=Count("offers", distinct=True),
             annotated_scan_count=Sum("offers__branch_stats__scan_count"),
@@ -83,6 +98,15 @@ def _business_queryset():
         )
         .order_by("name", "id")
     )
+
+
+def _support_write_blocked(request):
+    if deny_support_write(request):
+        return Response(
+            {"detail": "Owner admin role required for this action."},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+    return None
 
 
 class AdminLoginAPIView(TokenObtainPairView):
@@ -126,70 +150,150 @@ class AdminAnalyticsOverviewAPIView(APIView):
 
     def get(self, request):
         now = timezone.now()
-        active_offers = Offer.objects.filter(is_enabled=True).filter(
-            Q(is_time_limited=False)
-            | (
-                Q(is_time_limited=True)
-                & (Q(starts_at__isnull=True) | Q(starts_at__lte=now))
-                & (Q(ends_at__isnull=True) | Q(ends_at__gte=now))
-            )
+        try:
+            days = min(max(int(request.query_params.get("days", 30)), 1), 90)
+        except (TypeError, ValueError):
+            days = 30
+        today = timezone.localdate()
+        start = today - timedelta(days=days - 1)
+        from datetime import datetime, time as dt_time
+
+        start_dt = timezone.make_aware(datetime.combine(start, dt_time.min))
+
+        active_businesses = Business.objects.filter(deleted_at__isnull=True)
+        consumers = User.objects.filter(
+            account_type=User.AccountType.CONSUMER,
+            is_staff=False,
+            is_active=True,
         )
 
-        scan_total = OfferBranchStats.objects.aggregate(total=Sum("scan_count"))[
-            "total"
-        ] or 0
-        avail_total = OfferBranchStats.objects.aggregate(total=Sum("avail_count"))[
-            "total"
-        ] or 0
-        offer_views = OfferEngagementStats.objects.aggregate(total=Sum("view_count"))[
-            "total"
-        ] or 0
-        offer_likes = OfferEngagementStats.objects.aggregate(total=Sum("like_count"))[
-            "total"
-        ] or 0
-        business_views = BusinessEngagementStats.objects.aggregate(
-            total=Sum("view_count")
-        )["total"] or 0
-        business_likes = BusinessEngagementStats.objects.aggregate(
-            total=Sum("like_count")
-        )["total"] or 0
-
-        top_businesses = list(
-            Business.objects.annotate(
-                scan_count=Sum("offers__branch_stats__scan_count"),
-                redemption_count=Count("offers__redemptions", distinct=True),
-            )
-            .order_by("-scan_count", "-redemption_count", "name")[:5]
-            .values("id", "name", "scan_count", "redemption_count")
+        orders_qs = Order.objects.filter(placed_at__gte=start_dt)
+        orders_total_period = orders_qs.count()
+        cancelled_period = orders_qs.filter(status=Order.Status.CANCELLED).count()
+        cancel_rate = (
+            round((cancelled_period / orders_total_period) * 100, 2)
+            if orders_total_period
+            else 0.0
         )
-        for item in top_businesses:
-            item["scan_count"] = int(item["scan_count"] or 0)
-            item["redemption_count"] = int(item["redemption_count"] or 0)
+        sales = (
+            orders_qs.exclude(status=Order.Status.CANCELLED).aggregate(
+                total=Sum("total")
+            )["total"]
+            or Decimal("0.00")
+        )
 
-        recent_businesses = AdminBusinessSerializer(
-            _business_queryset().order_by("-id")[:5],
-            many=True,
-            context={"request": request},
-        ).data
-        recent_offers = AdminOfferSerializer(
-            Offer.objects.select_related(
-                "business", "business__category", "engagement_stats"
+        # orders_per_day series
+        orders_by_day = {
+            row["day"]: row["count"]
+            for row in orders_qs.annotate(day=TruncDate("placed_at"))
+            .values("day")
+            .annotate(count=Count("id"))
+        }
+        sales_by_day = {
+            row["day"]: row["sales"] or Decimal("0.00")
+            for row in orders_qs.exclude(status=Order.Status.CANCELLED)
+            .annotate(day=TruncDate("placed_at"))
+            .values("day")
+            .annotate(sales=Sum("total"))
+        }
+        orders_per_day = []
+        for offset in range(days):
+            day = start + timedelta(days=offset)
+            orders_per_day.append(
+                {
+                    "date": day.isoformat(),
+                    "orders": int(orders_by_day.get(day, 0)),
+                    "sales": str(sales_by_day.get(day, Decimal("0.00"))),
+                }
             )
-            .prefetch_related("branches", "branch_stats__branch", "gallery_images")
-            .annotate(
-                annotated_unique_viewers=Count(
-                    "view_events__user",
-                    distinct=True,
-                    filter=Q(view_events__user__isnull=False),
+
+        # Accept / deliver SLA from status history (all-time sample limited to period orders).
+        from django.db.models import Min
+
+        period_order_ids = list(orders_qs.values_list("id", flat=True)[:5000])
+        accept_deltas = []
+        deliver_deltas = []
+        if period_order_ids:
+            accepted_at = {
+                row["order_id"]: row["at"]
+                for row in OrderStatusHistory.objects.filter(
+                    order_id__in=period_order_ids, to_status=Order.Status.ACCEPTED
                 )
+                .values("order_id")
+                .annotate(at=Min("created_at"))
+            }
+            completed_at = {
+                row["order_id"]: row["at"]
+                for row in OrderStatusHistory.objects.filter(
+                    order_id__in=period_order_ids, to_status=Order.Status.COMPLETED
+                )
+                .values("order_id")
+                .annotate(at=Min("created_at"))
+            }
+            placed = {
+                o.id: o.placed_at
+                for o in Order.objects.filter(id__in=period_order_ids).only(
+                    "id", "placed_at"
+                )
+            }
+            for oid, acc_at in accepted_at.items():
+                p = placed.get(oid)
+                if p and acc_at >= p:
+                    accept_deltas.append((acc_at - p).total_seconds() / 60.0)
+                comp = completed_at.get(oid)
+                if comp and comp >= acc_at:
+                    deliver_deltas.append((comp - acc_at).total_seconds() / 60.0)
+
+        avg_accept_minutes = (
+            round(sum(accept_deltas) / len(accept_deltas), 2) if accept_deltas else None
+        )
+        avg_deliver_minutes = (
+            round(sum(deliver_deltas) / len(deliver_deltas), 2)
+            if deliver_deltas
+            else None
+        )
+
+        new_customers = consumers.filter(date_joined__gte=start_dt).count()
+        new_merchants = active_businesses.filter(
+            owner__date_joined__gte=start_dt
+        ).count()
+        open_reports = OrderProblemReport.objects.exclude(
+            status=OrderProblemReport.Status.RESOLVED
+        ).count()
+        under_review_businesses = active_businesses.filter(
+            verification_status=Business.VerificationStatus.UNDER_REVIEW
+        ).count()
+
+        top_products = list(
+            OrderItem.objects.filter(
+                order__placed_at__gte=start_dt,
+                order__status=Order.Status.COMPLETED,
             )
-            .order_by("-created_at", "-id")[:5],
-            many=True,
-            context={"request": request},
-        ).data
+            .values("product_id", "product_name")
+            .annotate(sales=Sum("line_total"), quantity=Sum("quantity"))
+            .order_by("-sales")[:10]
+        )
+        for row in top_products:
+            row["sales"] = str(row["sales"] or Decimal("0.00"))
+
+        top_merchants = list(
+            Order.objects.filter(
+                placed_at__gte=start_dt,
+                status=Order.Status.COMPLETED,
+                business__deleted_at__isnull=True,
+            )
+            .values("business_id", "business__name")
+            .annotate(sales=Sum("total"), order_count=Count("id"))
+            .order_by("-sales")[:10]
+        )
+        for row in top_merchants:
+            row["name"] = row.pop("business__name")
+            row["sales"] = str(row["sales"] or Decimal("0.00"))
 
         low_stock = Product.objects.filter(
-            stock_quantity__isnull=False, stock_quantity__lte=5
+            stock_quantity__isnull=False,
+            stock_quantity__lte=5,
+            business__deleted_at__isnull=True,
         ).count()
         orders_total = Order.objects.count()
         orders_pending = Order.objects.filter(status=Order.Status.PENDING).count()
@@ -199,9 +303,6 @@ class AdminAnalyticsOverviewAPIView(APIView):
         pending_payment_proofs = OrderPaymentProof.objects.filter(
             review_status=OrderPaymentProof.ReviewStatus.PENDING
         ).count()
-        offers_pending = Offer.objects.filter(
-            review_status=Offer.ReviewStatus.PENDING
-        ).count()
         order_volume = (
             Order.objects.exclude(status=Order.Status.CANCELLED).aggregate(
                 total=Sum("total")
@@ -209,14 +310,87 @@ class AdminAnalyticsOverviewAPIView(APIView):
             or 0
         )
 
-        return Response(
-            {
-                "counts": {
-                    "consumers": User.objects.filter(
-                        account_type=User.AccountType.CONSUMER
-                    ).count(),
-                    "businesses": Business.objects.count(),
-                    "branches": Branch.objects.count(),
+        counts = {
+            "consumers": consumers.count(),
+            "businesses": active_businesses.count(),
+            "branches": Branch.objects.filter(
+                business__deleted_at__isnull=True
+            ).count(),
+            "users_total": User.objects.filter(is_staff=False).count(),
+            "orders_total": orders_total,
+            "orders_pending": orders_pending,
+            "orders_payment_submitted": orders_payment_submitted,
+            "pending_payment_proofs": pending_payment_proofs,
+            "low_stock_products": low_stock,
+            "order_volume": str(order_volume),
+            "sales": str(sales),
+            "cancel_rate": cancel_rate,
+            "avg_accept_minutes": avg_accept_minutes,
+            "avg_deliver_minutes": avg_deliver_minutes,
+            "new_customers": new_customers,
+            "new_merchants": new_merchants,
+            "open_reports": open_reports,
+            "under_review_businesses": under_review_businesses,
+        }
+
+        payload = {
+            "days": days,
+            "counts": counts,
+            "orders_per_day": orders_per_day,
+            "top_products": top_products,
+            "top_merchants": top_merchants,
+            "recent_businesses": AdminBusinessSerializer(
+                _business_queryset().order_by("-id")[:5],
+                many=True,
+                context={"request": request},
+            ).data,
+        }
+
+        offers_enabled = bool(getattr(django_settings, "OFFERS_ENABLED", False))
+        payload["offers_enabled"] = offers_enabled
+        if offers_enabled:
+            active_offers = Offer.objects.filter(is_enabled=True).filter(
+                Q(is_time_limited=False)
+                | (
+                    Q(is_time_limited=True)
+                    & (Q(starts_at__isnull=True) | Q(starts_at__lte=now))
+                    & (Q(ends_at__isnull=True) | Q(ends_at__gte=now))
+                )
+            )
+            scan_total = OfferBranchStats.objects.aggregate(total=Sum("scan_count"))[
+                "total"
+            ] or 0
+            avail_total = OfferBranchStats.objects.aggregate(total=Sum("avail_count"))[
+                "total"
+            ] or 0
+            offer_views = OfferEngagementStats.objects.aggregate(
+                total=Sum("view_count")
+            )["total"] or 0
+            offer_likes = OfferEngagementStats.objects.aggregate(
+                total=Sum("like_count")
+            )["total"] or 0
+            business_views = BusinessEngagementStats.objects.aggregate(
+                total=Sum("view_count")
+            )["total"] or 0
+            business_likes = BusinessEngagementStats.objects.aggregate(
+                total=Sum("like_count")
+            )["total"] or 0
+            offers_pending = Offer.objects.filter(
+                review_status=Offer.ReviewStatus.PENDING
+            ).count()
+            top_businesses = list(
+                active_businesses.annotate(
+                    scan_count=Sum("offers__branch_stats__scan_count"),
+                    redemption_count=Count("offers__redemptions", distinct=True),
+                )
+                .order_by("-scan_count", "-redemption_count", "name")[:5]
+                .values("id", "name", "scan_count", "redemption_count")
+            )
+            for item in top_businesses:
+                item["scan_count"] = int(item["scan_count"] or 0)
+                item["redemption_count"] = int(item["redemption_count"] or 0)
+            counts.update(
+                {
                     "offers_total": Offer.objects.count(),
                     "offers_active": active_offers.count(),
                     "offers_pending": offers_pending,
@@ -227,19 +401,30 @@ class AdminAnalyticsOverviewAPIView(APIView):
                     "offer_likes": int(offer_likes),
                     "business_views": int(business_views),
                     "business_likes": int(business_likes),
-                    "users_total": User.objects.count(),
-                    "orders_total": orders_total,
-                    "orders_pending": orders_pending,
-                    "orders_payment_submitted": orders_payment_submitted,
-                    "pending_payment_proofs": pending_payment_proofs,
-                    "low_stock_products": low_stock,
-                    "order_volume": str(order_volume),
-                },
-                "top_businesses": top_businesses,
-                "recent_businesses": recent_businesses,
-                "recent_offers": recent_offers,
-            }
-        )
+                }
+            )
+            payload["top_businesses"] = top_businesses
+            payload["recent_offers"] = AdminOfferSerializer(
+                Offer.objects.select_related(
+                    "business", "business__category", "engagement_stats"
+                )
+                .prefetch_related("branches", "branch_stats__branch", "gallery_images")
+                .annotate(
+                    annotated_unique_viewers=Count(
+                        "view_events__user",
+                        distinct=True,
+                        filter=Q(view_events__user__isnull=False),
+                    )
+                )
+                .order_by("-created_at", "-id")[:5],
+                many=True,
+                context={"request": request},
+            ).data
+        else:
+            payload["top_businesses"] = []
+            payload["recent_offers"] = []
+
+        return Response(payload)
 
 
 class AdminAnalyticsTimeseriesAPIView(APIView):
@@ -254,38 +439,68 @@ class AdminAnalyticsTimeseriesAPIView(APIView):
         today = timezone.localdate()
         start = today - timedelta(days=days - 1)
 
-        scans_by_day = {
+        orders_base = Order.objects.filter(placed_at__date__gte=start)
+        orders_by_day = {
             row["day"]: row["count"]
-            for row in OfferScan.objects.filter(scanned_at__date__gte=start)
-            .annotate(day=TruncDate("scanned_at"))
+            for row in orders_base.annotate(day=TruncDate("placed_at"))
             .values("day")
             .annotate(count=Count("id"))
         }
-        redemptions_by_day = {
-            row["day"]: row["count"]
-            for row in OfferRedemption.objects.filter(redeemed_at__date__gte=start)
-            .annotate(day=TruncDate("redeemed_at"))
+        sales_by_day = {
+            row["day"]: row["sales"] or Decimal("0.00")
+            for row in orders_base.exclude(status=Order.Status.CANCELLED)
+            .annotate(day=TruncDate("placed_at"))
             .values("day")
-            .annotate(count=Count("id"))
+            .annotate(sales=Sum("total"))
         }
-        views_by_day = {
-            row["viewed_on"]: row["count"]
-            for row in OfferViewEvent.objects.filter(viewed_on__gte=start)
-            .values("viewed_on")
+        cancellations_by_day = {
+            row["day"]: row["count"]
+            for row in orders_base.filter(status=Order.Status.CANCELLED)
+            .annotate(day=TruncDate("placed_at"))
+            .values("day")
             .annotate(count=Count("id"))
         }
 
         series = []
+        offers_enabled = bool(getattr(django_settings, "OFFERS_ENABLED", False))
+        scans_by_day = {}
+        redemptions_by_day = {}
+        views_by_day = {}
+        if offers_enabled:
+            scans_by_day = {
+                row["day"]: row["count"]
+                for row in OfferScan.objects.filter(scanned_at__date__gte=start)
+                .annotate(day=TruncDate("scanned_at"))
+                .values("day")
+                .annotate(count=Count("id"))
+            }
+            redemptions_by_day = {
+                row["day"]: row["count"]
+                for row in OfferRedemption.objects.filter(redeemed_at__date__gte=start)
+                .annotate(day=TruncDate("redeemed_at"))
+                .values("day")
+                .annotate(count=Count("id"))
+            }
+            views_by_day = {
+                row["viewed_on"]: row["count"]
+                for row in OfferViewEvent.objects.filter(viewed_on__gte=start)
+                .values("viewed_on")
+                .annotate(count=Count("id"))
+            }
+
         for offset in range(days):
             day = start + timedelta(days=offset)
-            series.append(
-                {
-                    "date": day.isoformat(),
-                    "scans": int(scans_by_day.get(day, 0)),
-                    "redemptions": int(redemptions_by_day.get(day, 0)),
-                    "views": int(views_by_day.get(day, 0)),
-                }
-            )
+            point = {
+                "date": day.isoformat(),
+                "orders": int(orders_by_day.get(day, 0)),
+                "sales": str(sales_by_day.get(day, Decimal("0.00"))),
+                "cancellations": int(cancellations_by_day.get(day, 0)),
+            }
+            if offers_enabled:
+                point["scans"] = int(scans_by_day.get(day, 0))
+                point["redemptions"] = int(redemptions_by_day.get(day, 0))
+                point["views"] = int(views_by_day.get(day, 0))
+            series.append(point)
 
         return Response({"days": days, "series": series})
 
@@ -295,7 +510,12 @@ class AdminBusinessListCreateAPIView(APIView):
     parser_classes = [MultiPartParser, FormParser, JSONParser]
 
     def get(self, request):
-        qs = _business_queryset()
+        include_deleted = (request.query_params.get("include_deleted") or "").lower() in (
+            "1",
+            "true",
+            "yes",
+        )
+        qs = _business_queryset(include_deleted=include_deleted)
         search = (request.query_params.get("search") or "").strip()
         if search:
             qs = qs.filter(
@@ -312,11 +532,21 @@ class AdminBusinessListCreateAPIView(APIView):
         return _paginate(qs, request, AdminBusinessSerializer)
 
     def post(self, request):
+        blocked = _support_write_blocked(request)
+        if blocked:
+            return blocked
         serializer = AdminBusinessCreateSerializer(
             data=request.data, context={"request": request}
         )
         serializer.is_valid(raise_exception=True)
         business = serializer.save()
+        write_audit(
+            actor=request.user,
+            action="business.create",
+            target_type="Business",
+            target_id=business.id,
+            metadata={"name": business.name},
+        )
         output = AdminBusinessSerializer(
             _business_queryset().get(pk=business.pk),
             context={"request": request},
@@ -335,8 +565,10 @@ class AdminBusinessDetailAPIView(APIView):
     permission_classes = [IsAdminAccount]
     parser_classes = [MultiPartParser, FormParser, JSONParser]
 
-    def get_object(self, business_id: int) -> Business:
-        return get_object_or_404(_business_queryset(), pk=business_id)
+    def get_object(self, business_id: int, *, include_deleted: bool = False) -> Business:
+        return get_object_or_404(
+            _business_queryset(include_deleted=include_deleted), pk=business_id
+        )
 
     def get(self, request, business_id: int):
         business = self.get_object(business_id)
@@ -351,7 +583,22 @@ class AdminBusinessDetailAPIView(APIView):
         return self._update(request, business_id, partial=True)
 
     def _update(self, request, business_id: int, partial: bool):
+        blocked = _support_write_blocked(request)
+        if blocked:
+            return blocked
         business = self.get_object(business_id)
+        previous_status = business.verification_status
+        incoming_status = request.data.get("verification_status")
+        if (
+            incoming_status is not None
+            and incoming_status != previous_status
+            and not admin_can_mutate_platform(request.user)
+        ):
+            return Response(
+                {"detail": "Owner admin role required to verify or suspend."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
         serializer = AdminBusinessSerializer(
             business,
             data=request.data,
@@ -359,8 +606,56 @@ class AdminBusinessDetailAPIView(APIView):
             context={"request": request},
         )
         serializer.is_valid(raise_exception=True)
+
+        new_status = serializer.validated_data.get("verification_status", previous_status)
+        if (
+            new_status == Business.VerificationStatus.VERIFIED
+            and previous_status != Business.VerificationStatus.VERIFIED
+        ):
+            from .views_admin_trust import verification_checklist_errors
+
+            errors = verification_checklist_errors(business)
+            # Re-check against validated fields that may be updating in same request.
+            phone = serializer.validated_data.get("phone", business.phone)
+            whatsapp = serializer.validated_data.get(
+                "notification_whatsapp", business.notification_whatsapp
+            )
+            instagram = serializer.validated_data.get(
+                "instagram_url", business.instagram_url
+            )
+            # Temporary overlay for checklist using pending values.
+            business.phone = phone or business.phone
+            business.notification_whatsapp = whatsapp or business.notification_whatsapp
+            business.instagram_url = instagram or business.instagram_url
+            errors = verification_checklist_errors(business)
+            if errors:
+                return Response(
+                    {
+                        "message": "Business is missing required verification fields.",
+                        "errors": errors,
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
         serializer.save()
         refreshed = self.get_object(business_id)
+
+        if refreshed.verification_status != previous_status:
+            write_audit(
+                actor=request.user,
+                action="business.verification_status",
+                target_type="Business",
+                target_id=refreshed.id,
+                metadata={
+                    "from": previous_status,
+                    "to": refreshed.verification_status,
+                },
+            )
+            if refreshed.verification_status == Business.VerificationStatus.VERIFIED:
+                notify_merchant_verification(refreshed, approved=True, reason="")
+            elif refreshed.verification_status == Business.VerificationStatus.SUSPENDED:
+                notify_merchant_verification(refreshed, approved=False, reason="")
+
         return Response(
             {
                 "message": "Business updated successfully.",
@@ -372,11 +667,28 @@ class AdminBusinessDetailAPIView(APIView):
         )
 
     def delete(self, request, business_id: int):
-        business = get_object_or_404(Business.objects.select_related("owner"), pk=business_id)
-        owner = business.owner
-        business.delete()
-        if owner.account_type == User.AccountType.BUSINESS:
-            owner.delete()
+        blocked = _support_write_blocked(request)
+        if blocked:
+            return blocked
+        if not admin_can_mutate_platform(request.user):
+            return Response(
+                {"detail": "Owner admin role required."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        business = get_object_or_404(
+            Business.objects.select_related("owner").filter(deleted_at__isnull=True),
+            pk=business_id,
+        )
+        business.deleted_at = timezone.now()
+        business.is_paused = True
+        business.save(update_fields=["deleted_at", "is_paused"])
+        write_audit(
+            actor=request.user,
+            action="business.soft_delete",
+            target_type="Business",
+            target_id=business.id,
+            metadata={"name": business.name},
+        )
         return Response(
             {"message": "Business deleted successfully.", "errors": {}},
             status=status.HTTP_200_OK,
@@ -410,6 +722,9 @@ class AdminBusinessBranchListCreateAPIView(APIView):
         )
 
     def post(self, request, business_id: int):
+        blocked = _support_write_blocked(request)
+        if blocked:
+            return blocked
         business = self.get_business(business_id)
         serializer = AdminBranchSerializer(
             data=request.data,
@@ -455,6 +770,9 @@ class AdminBranchDetailAPIView(APIView):
         return self._update(request, branch_id, partial=True)
 
     def _update(self, request, branch_id: int, partial: bool):
+        blocked = _support_write_blocked(request)
+        if blocked:
+            return blocked
         branch = self.get_object(branch_id)
         serializer = AdminBranchSerializer(
             branch,
@@ -476,6 +794,9 @@ class AdminBranchDetailAPIView(APIView):
         )
 
     def delete(self, request, branch_id: int):
+        blocked = _support_write_blocked(request)
+        if blocked:
+            return blocked
         branch = get_object_or_404(Branch, pk=branch_id)
         if branch.offers.exists():
             return Response(
@@ -502,6 +823,9 @@ class AdminBranchContactsAPIView(APIView):
         )
 
     def put(self, request, branch_id: int):
+        blocked = _support_write_blocked(request)
+        if blocked:
+            return blocked
         branch = get_object_or_404(Branch, pk=branch_id)
         serializer = BranchContactSerializer(data=request.data, many=True)
         serializer.is_valid(raise_exception=True)
@@ -522,6 +846,9 @@ class AdminBranchFulfillmentAPIView(APIView):
         return Response(BranchFulfillmentSettingsSerializer(settings).data)
 
     def patch(self, request, branch_id: int):
+        blocked = _support_write_blocked(request)
+        if blocked:
+            return blocked
         branch = get_object_or_404(Branch, pk=branch_id)
         settings = get_or_create_fulfillment_settings(branch)
         serializer = BranchFulfillmentSettingsSerializer(
@@ -606,6 +933,9 @@ class AdminOfferListCreateAPIView(APIView):
         return _paginate(qs, request, AdminOfferSerializer)
 
     def post(self, request):
+        blocked = _support_write_blocked(request)
+        if blocked:
+            return blocked
         business_id = request.data.get("business_id")
         business = None
         if business_id:
@@ -689,6 +1019,9 @@ class AdminOfferDetailAPIView(APIView):
         return self._update(request, offer_id, partial=True)
 
     def _update(self, request, offer_id: int, partial: bool):
+        blocked = _support_write_blocked(request)
+        if blocked:
+            return blocked
         offer = self.get_object(offer_id)
         serializer = AdminOfferSerializer(
             offer,
@@ -710,6 +1043,9 @@ class AdminOfferDetailAPIView(APIView):
         )
 
     def delete(self, request, offer_id: int):
+        blocked = _support_write_blocked(request)
+        if blocked:
+            return blocked
         offer = get_object_or_404(Offer, pk=offer_id)
         offer.delete()
         return Response(
@@ -728,6 +1064,9 @@ class AdminOfferApproveAPIView(APIView):
     permission_classes = [IsAdminAccount]
 
     def post(self, request, offer_id: int):
+        blocked = _support_write_blocked(request)
+        if blocked:
+            return blocked
         offer = get_object_or_404(Offer, pk=offer_id)
         if offer.review_status == Offer.ReviewStatus.REJECTED:
             return Response(
@@ -765,6 +1104,9 @@ class AdminOfferRejectAPIView(APIView):
     permission_classes = [IsAdminAccount]
 
     def post(self, request, offer_id: int):
+        blocked = _support_write_blocked(request)
+        if blocked:
+            return blocked
         offer = get_object_or_404(Offer, pk=offer_id)
         if offer.origin == Offer.Origin.MANUAL:
             return Response(
@@ -791,6 +1133,9 @@ class AdminOfferBulkApproveAPIView(APIView):
     permission_classes = [IsAdminAccount]
 
     def post(self, request):
+        blocked = _support_write_blocked(request)
+        if blocked:
+            return blocked
         raw_ids = request.data.get("ids") or request.data.get("offer_ids") or []
         if not isinstance(raw_ids, list) or not raw_ids:
             return Response(
@@ -947,6 +1292,10 @@ class AdminUserListAPIView(APIView):
     def get(self, request):
         qs = (
             User.objects.select_related("business_profile")
+            .annotate(
+                annotated_order_count=Count("orders", distinct=True),
+                annotated_last_order_at=Max("orders__placed_at"),
+            )
             .order_by("-date_joined", "-id")
         )
         search = (request.query_params.get("search") or "").strip()
@@ -977,7 +1326,11 @@ class AdminUserDetailAPIView(APIView):
 
     def get_object(self, user_id: int) -> User:
         return get_object_or_404(
-            User.objects.select_related("business_profile"), pk=user_id
+            User.objects.select_related("business_profile").annotate(
+                annotated_order_count=Count("orders", distinct=True),
+                annotated_last_order_at=Max("orders__placed_at"),
+            ),
+            pk=user_id,
         )
 
     def get(self, request, user_id: int):
@@ -985,6 +1338,9 @@ class AdminUserDetailAPIView(APIView):
         return Response(AdminUserSerializer(user).data)
 
     def patch(self, request, user_id: int):
+        blocked = _support_write_blocked(request)
+        if blocked:
+            return blocked
         user = self.get_object(user_id)
         if user.is_superuser and request.user.pk == user.pk:
             if request.data.get("is_active") is False:
@@ -1025,6 +1381,9 @@ class AdminCategoryListCreateAPIView(APIView):
         return _paginate(qs, request, AdminCategorySerializer)
 
     def post(self, request):
+        blocked = _support_write_blocked(request)
+        if blocked:
+            return blocked
         serializer = AdminCategorySerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         category = serializer.save()
@@ -1058,6 +1417,9 @@ class AdminCategoryDetailAPIView(APIView):
         return self._update(request, category_id, partial=True)
 
     def _update(self, request, category_id: int, partial: bool):
+        blocked = _support_write_blocked(request)
+        if blocked:
+            return blocked
         category = self.get_object(category_id)
         serializer = AdminCategorySerializer(
             category, data=request.data, partial=partial
@@ -1074,6 +1436,9 @@ class AdminCategoryDetailAPIView(APIView):
         )
 
     def delete(self, request, category_id: int):
+        blocked = _support_write_blocked(request)
+        if blocked:
+            return blocked
         category = get_object_or_404(Category, pk=category_id)
         in_use = (
             category.businesses.exists()

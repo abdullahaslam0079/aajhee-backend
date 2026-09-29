@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from datetime import timedelta
+from datetime import datetime, time, timedelta
 from decimal import Decimal
 
 from django.utils import timezone
@@ -125,7 +125,32 @@ def option_to_dict(option: DeliveryOption) -> dict:
     return data
 
 
-def compute_promised_by(max_delivery_hours: int | None):
+def compute_promised_by(
+    max_delivery_hours: int | None,
+    *,
+    fulfillment_type: str | None = None,
+    cutoff_time: time | None = None,
+):
+    """
+    Same-day orders promise end of local day (or store cutoff), not a rolling 24h window.
+    Nationwide / other types keep now + max_delivery_hours.
+    """
+    now = timezone.now()
+    local_now = timezone.localtime(now)
+
+    if fulfillment_type == Order.FulfillmentType.LOCAL_SAME_DAY:
+        if cutoff_time is not None:
+            promised_local = datetime.combine(local_now.date(), cutoff_time)
+            if timezone.is_naive(promised_local):
+                promised_local = timezone.make_aware(
+                    promised_local, timezone.get_current_timezone()
+                )
+            return promised_local
+        end_of_day = datetime.combine(local_now.date(), time(23, 59, 59))
+        if timezone.is_naive(end_of_day):
+            end_of_day = timezone.make_aware(end_of_day, timezone.get_current_timezone())
+        return end_of_day
+
     if max_delivery_hours is None:
         return None
-    return timezone.now() + timedelta(hours=max_delivery_hours)
+    return now + timedelta(hours=max_delivery_hours)

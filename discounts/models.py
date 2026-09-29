@@ -31,6 +31,10 @@ class User(AbstractUser):
         CONSUMER = "consumer", "Consumer"
         BUSINESS = "business", "Business"
 
+    class AdminRole(models.TextChoices):
+        OWNER = "owner", "Owner"
+        SUPPORT = "support", "Support"
+
     username = None
     email = models.EmailField(unique=True)
     phone = models.CharField(
@@ -52,6 +56,13 @@ class User(AbstractUser):
         choices=AccountType.choices,
         default=AccountType.CONSUMER,
     )
+    admin_role = models.CharField(
+        max_length=16,
+        choices=AdminRole.choices,
+        default=AdminRole.OWNER,
+        blank=True,
+        help_text="Staff role: Owner (full) or Support (orders/reports write, read-only elsewhere).",
+    )
     USERNAME_FIELD = "email"
     REQUIRED_FIELDS = []
 
@@ -60,6 +71,14 @@ class User(AbstractUser):
     @property
     def is_business_account(self) -> bool:
         return self.account_type == self.AccountType.BUSINESS
+
+    @property
+    def is_admin_owner(self) -> bool:
+        return bool(self.is_staff and self.admin_role == self.AdminRole.OWNER)
+
+    @property
+    def is_admin_support(self) -> bool:
+        return bool(self.is_staff and self.admin_role == self.AdminRole.SUPPORT)
 
     def __str__(self) -> str:
         return self.phone or self.email
@@ -208,6 +227,12 @@ class Business(models.Model):
         default=False,
         help_text="When true, hide the store from customers without deleting it.",
     )
+    deleted_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        db_index=True,
+        help_text="Soft-delete timestamp; keeps order history.",
+    )
     business_hours = models.JSONField(
         default=dict,
         blank=True,
@@ -215,11 +240,16 @@ class Business(models.Model):
     )
 
     def is_customer_visible(self) -> bool:
-        """Visible in customer feeds only when verified and not paused."""
+        """Visible in customer feeds only when verified, not paused, and not deleted."""
         return (
-            self.verification_status == self.VerificationStatus.VERIFIED
+            self.deleted_at is None
+            and self.verification_status == self.VerificationStatus.VERIFIED
             and not self.is_paused
         )
+
+    @property
+    def is_deleted(self) -> bool:
+        return self.deleted_at is not None
 
     def __str__(self) -> str:
         return self.name
@@ -320,6 +350,11 @@ class BranchFulfillmentSettings(models.Model):
         max_digits=10, decimal_places=2, default=Decimal("0.00")
     )
     same_day_max_delivery_hours = models.PositiveIntegerField(default=24)
+    same_day_cutoff_time = models.TimeField(
+        null=True,
+        blank=True,
+        help_text="Optional same-day order cutoff (local). Promised by = that time today, else end of day.",
+    )
     same_day_radius_km = models.DecimalField(
         max_digits=6,
         decimal_places=2,
@@ -1264,6 +1299,8 @@ class Order(models.Model):
         help_text="Normalized Pakistani mobile (+923…) at place time.",
     )
     customer_notes = models.TextField(blank=True)
+    admin_note = models.TextField(blank=True, default="")
+    is_escalated = models.BooleanField(default=False, db_index=True)
     # Snapshots of cancel policy at place time
     customer_cancel_allowed = models.BooleanField(default=True)
     customer_cancel_until = models.DateTimeField(null=True, blank=True)
@@ -1362,8 +1399,39 @@ class OrderPaymentProof(models.Model):
         return f"PaymentProof<{self.order_id}:{self.id}>"
 
 
+class OrderStatusHistory(models.Model):
+    """Immutable status transition log for an order."""
+
+    order = models.ForeignKey(
+        Order, on_delete=models.CASCADE, related_name="status_history"
+    )
+    from_status = models.CharField(max_length=32, blank=True)
+    to_status = models.CharField(max_length=32)
+    actor = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="order_status_changes",
+    )
+    note = models.TextField(blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["created_at", "id"]
+        verbose_name_plural = "order status histories"
+
+    def __str__(self) -> str:
+        return f"OrderStatusHistory<{self.order_id}:{self.from_status}->{self.to_status}>"
+
+
 class OrderProblemReport(models.Model):
     """Customer-reported issue against an order (trust / support)."""
+
+    class Status(models.TextChoices):
+        OPEN = "open", "Open"
+        IN_PROGRESS = "in_progress", "In progress"
+        RESOLVED = "resolved", "Resolved"
 
     order = models.ForeignKey(
         Order, on_delete=models.CASCADE, related_name="problem_reports"
@@ -1372,13 +1440,75 @@ class OrderProblemReport(models.Model):
         User, on_delete=models.CASCADE, related_name="order_problem_reports"
     )
     message = models.TextField()
+    status = models.CharField(
+        max_length=16,
+        choices=Status.choices,
+        default=Status.OPEN,
+        db_index=True,
+    )
+    resolution_note = models.TextField(blank=True, default="")
+    resolved_at = models.DateTimeField(null=True, blank=True)
+    resolved_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="resolved_order_problem_reports",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         ordering = ["-created_at", "-id"]
 
     def __str__(self) -> str:
         return f"OrderProblemReport<{self.order_id}:{self.id}>"
+
+
+class OrderProblemReportNote(models.Model):
+    """Internal admin note on a customer problem report."""
+
+    report = models.ForeignKey(
+        OrderProblemReport, on_delete=models.CASCADE, related_name="notes"
+    )
+    author = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="order_problem_report_notes",
+    )
+    body = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["created_at", "id"]
+
+    def __str__(self) -> str:
+        return f"OrderProblemReportNote<{self.report_id}:{self.id}>"
+
+
+class AuditLog(models.Model):
+    """Who changed what, when — verify, suspend, delete, price, bulk, etc."""
+
+    actor = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="audit_logs",
+    )
+    action = models.CharField(max_length=64, db_index=True)
+    target_type = models.CharField(max_length=64, db_index=True)
+    target_id = models.CharField(max_length=64, blank=True, default="", db_index=True)
+    metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
+
+    def __str__(self) -> str:
+        return f"AuditLog<{self.action}:{self.target_type}:{self.target_id}>"
 
 
 class ProductReview(models.Model):

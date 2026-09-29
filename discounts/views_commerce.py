@@ -41,7 +41,12 @@ from .order_service import (
     transition_order_status,
 )
 from .pagination import StandardResultsSetPagination
-from .permissions import IsAdminAccount, IsBusinessAccount, IsConsumerAccount
+from .permissions import (
+    IsAdminAccount,
+    IsBusinessAccount,
+    IsConsumerAccount,
+    deny_support_write,
+)
 from .product_pricing import apply_discount_percent, apply_sale_price, bulk_apply_percent, clear_discount
 from .serializers_commerce import (
     AdminProductSerializer,
@@ -70,6 +75,15 @@ from .serializers_commerce import (
     serialize_delivery_options,
 )
 from .visibility import business_is_visible, resolve_business_visibility
+
+
+def _admin_support_write_blocked(request):
+    if deny_support_write(request):
+        return Response(
+            {"detail": "Owner admin role required for this action."},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+    return None
 
 
 class UserLocationContextMixin:
@@ -811,9 +825,11 @@ class BusinessBulkDiscountAPIView(APIView):
     permission_classes = [IsAuthenticated, IsBusinessAccount]
 
     def post(self, request):
-        serializer = BulkDiscountSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
         business = request.user.business_profile
+        data = request.data.copy() if hasattr(request.data, "copy") else dict(request.data)
+        data["business_id"] = business.id
+        serializer = BulkDiscountSerializer(data=data)
+        serializer.is_valid(raise_exception=True)
         qs = Product.objects.filter(business=business)
         if not serializer.validated_data.get("all_products"):
             qs = qs.filter(id__in=serializer.validated_data["product_ids"])
@@ -1216,6 +1232,9 @@ class AdminCategoryTreeListCreateAPIView(APIView):
         return Response(CategoryTreeSerializer(roots, many=True).data)
 
     def post(self, request):
+        blocked = _admin_support_write_blocked(request)
+        if blocked:
+            return blocked
         serializer = CategoryWriteSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         category = serializer.save()
@@ -1228,6 +1247,9 @@ class AdminCategoryTreeDetailAPIView(APIView):
     permission_classes = [IsAuthenticated, IsAdminAccount]
 
     def patch(self, request, category_id: int):
+        blocked = _admin_support_write_blocked(request)
+        if blocked:
+            return blocked
         category = get_object_or_404(Category, pk=category_id)
         serializer = CategoryWriteSerializer(
             category, data=request.data, partial=True
@@ -1237,6 +1259,9 @@ class AdminCategoryTreeDetailAPIView(APIView):
         return Response(serializer.data)
 
     def delete(self, request, category_id: int):
+        blocked = _admin_support_write_blocked(request)
+        if blocked:
+            return blocked
         category = get_object_or_404(Category, pk=category_id)
         if category.children.exists():
             return Response(
@@ -1260,7 +1285,12 @@ class AdminOrderListAPIView(generics.ListAPIView):
     def get_queryset(self):
         qs = (
             Order.objects.select_related("business", "branch", "user")
-            .prefetch_related("items", "payment_proofs", "delivery_snapshot")
+            .prefetch_related(
+                "items",
+                "payment_proofs",
+                "delivery_snapshot",
+                "status_history__actor",
+            )
             .order_by("-placed_at")
         )
         status_filter = self.request.query_params.get("status")
@@ -1302,8 +1332,18 @@ class AdminOrderDetailAPIView(generics.RetrieveAPIView):
     def get_queryset(self):
         return (
             Order.objects.select_related("business", "branch", "user")
-            .prefetch_related("items", "payment_proofs", "delivery_snapshot")
+            .prefetch_related(
+                "items",
+                "payment_proofs",
+                "delivery_snapshot",
+                "status_history__actor",
+            )
         )
+
+    def patch(self, request, *args, **kwargs):
+        from .views_admin_trust import AdminOrderPatchAPIView
+
+        return AdminOrderPatchAPIView().patch(request, public_id=kwargs["public_id"])
 
 
 class AdminOrderStatusAPIView(APIView):
@@ -1318,9 +1358,14 @@ class AdminOrderStatusAPIView(APIView):
                 order,
                 by=Order.CancelledBy.BUSINESS,
                 reason=serializer.validated_data.get("reason") or "",
+                actor=request.user,
             )
         else:
-            transition_order_status(order, serializer.validated_data["status"])
+            transition_order_status(
+                order,
+                serializer.validated_data["status"],
+                actor=request.user,
+            )
         return Response(OrderSerializer(order, context={"request": request}).data)
 
 
@@ -1363,6 +1408,12 @@ class AdminProductListCreateAPIView(generics.ListCreateAPIView):
     pagination_class = StandardResultsSetPagination
     parser_classes = [MultiPartParser, FormParser, JSONParser]
 
+    def create(self, request, *args, **kwargs):
+        blocked = _admin_support_write_blocked(request)
+        if blocked:
+            return blocked
+        return super().create(request, *args, **kwargs)
+
     def get_queryset(self):
         qs = (
             Product.objects.select_related("business", "category", "engagement_stats")
@@ -1394,6 +1445,18 @@ class AdminProductDetailAPIView(generics.RetrieveUpdateDestroyAPIView):
     serializer_class = AdminProductSerializer
     lookup_url_kwarg = "product_id"
     parser_classes = [MultiPartParser, FormParser, JSONParser]
+
+    def update(self, request, *args, **kwargs):
+        blocked = _admin_support_write_blocked(request)
+        if blocked:
+            return blocked
+        return super().update(request, *args, **kwargs)
+
+    def destroy(self, request, *args, **kwargs):
+        blocked = _admin_support_write_blocked(request)
+        if blocked:
+            return blocked
+        return super().destroy(request, *args, **kwargs)
 
     def get_queryset(self):
         return Product.objects.select_related("business", "category").prefetch_related(
@@ -1447,15 +1510,35 @@ class AdminBulkDiscountAPIView(APIView):
     permission_classes = [IsAuthenticated, IsAdminAccount]
 
     def post(self, request):
+        from .permissions import admin_can_mutate_platform
+        from .audit_utils import write_audit
+
+        if not admin_can_mutate_platform(request.user):
+            return Response(
+                {"detail": "Owner admin role required."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
         serializer = BulkDiscountSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         qs = Product.objects.all()
-        business_id = request.data.get("business_id")
+        business_id = serializer.validated_data.get("business_id")
         if business_id:
             qs = qs.filter(business_id=business_id)
         if not serializer.validated_data.get("all_products"):
             qs = qs.filter(id__in=serializer.validated_data["product_ids"])
         count = bulk_apply_percent(qs, serializer.validated_data["discount_percent"])
+        write_audit(
+            actor=request.user,
+            action="product.bulk_discount",
+            target_type="Business" if business_id else "Product",
+            target_id=business_id or "",
+            metadata={
+                "updated": count,
+                "discount_percent": str(serializer.validated_data["discount_percent"]),
+                "all_products": bool(serializer.validated_data.get("all_products")),
+                "product_ids": serializer.validated_data.get("product_ids") or [],
+            },
+        )
         return Response({"updated": count})
 
 

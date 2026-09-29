@@ -18,6 +18,7 @@ from .models import (
     OrderDeliverySnapshot,
     OrderItem,
     OrderPaymentProof,
+    OrderStatusHistory,
     Product,
     ProductGalleryImage,
     ProductReview,
@@ -136,6 +137,7 @@ class BranchFulfillmentSettingsSerializer(serializers.ModelSerializer):
             "same_day_enabled",
             "same_day_fee",
             "same_day_max_delivery_hours",
+            "same_day_cutoff_time",
             "same_day_radius_km",
             "same_day_areas",
             "nationwide_enabled",
@@ -419,11 +421,22 @@ class BulkDiscountSerializer(serializers.Serializer):
         child=serializers.IntegerField(), required=False, allow_empty=True
     )
     all_products = serializers.BooleanField(default=False)
+    business_id = serializers.IntegerField(required=False, allow_null=True)
+    confirm = serializers.CharField(required=False, allow_blank=True, default="")
 
     def validate(self, attrs):
         if not attrs.get("all_products") and not attrs.get("product_ids"):
             raise serializers.ValidationError(
                 "Provide product_ids or set all_products=true."
+            )
+        if attrs.get("all_products") and not attrs.get("business_id"):
+            raise serializers.ValidationError(
+                {"business_id": "business_id is required when all_products=true."}
+            )
+        confirm = (attrs.get("confirm") or "").strip()
+        if attrs.get("all_products") and confirm != "CONFIRM":
+            raise serializers.ValidationError(
+                {"confirm": 'Type CONFIRM to apply a bulk discount to all listings.'}
             )
         percent = attrs["discount_percent"]
         if percent < 0 or percent > 100:
@@ -678,10 +691,36 @@ class OrderPaymentProofSerializer(serializers.ModelSerializer):
         return build_media_url(self.context.get("request"), obj.file)
 
 
+class OrderStatusHistorySerializer(serializers.ModelSerializer):
+    actor_email = serializers.SerializerMethodField()
+
+    class Meta:
+        model = OrderStatusHistory
+        fields = [
+            "id",
+            "from_status",
+            "to_status",
+            "actor_id",
+            "actor_email",
+            "note",
+            "created_at",
+        ]
+        read_only_fields = fields
+
+    def get_actor_email(self, obj: OrderStatusHistory) -> str | None:
+        if not obj.actor_id:
+            return None
+        email = obj.actor.email
+        if email and email.lower().endswith("@phone.aajhee.local"):
+            return None
+        return email
+
+
 class OrderSerializer(serializers.ModelSerializer):
     items = OrderItemSerializer(many=True, read_only=True)
     delivery_snapshot = OrderDeliverySnapshotSerializer(read_only=True)
     payment_proofs = OrderPaymentProofSerializer(many=True, read_only=True)
+    status_history = OrderStatusHistorySerializer(many=True, read_only=True)
     business_name = serializers.CharField(source="business.name", read_only=True)
     branch_name = serializers.CharField(source="branch.name", read_only=True)
     customer_name = serializers.SerializerMethodField()
@@ -715,6 +754,8 @@ class OrderSerializer(serializers.ModelSerializer):
             "delivery_house_number",
             "delivery_landmark",
             "customer_notes",
+            "admin_note",
+            "is_escalated",
             "customer_name",
             "customer_phone",
             "customer_email",
@@ -731,6 +772,7 @@ class OrderSerializer(serializers.ModelSerializer):
             "items",
             "delivery_snapshot",
             "payment_proofs",
+            "status_history",
             "bank_transfer_instructions",
             "payment_instructions",
         ]

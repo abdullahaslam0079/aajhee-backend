@@ -56,6 +56,17 @@ from .views_admin import (
     AdminUserDetailAPIView,
     AdminUserListAPIView,
 )
+from .views_admin_trust import (
+    AdminAuditLogListAPIView,
+    AdminBusinessPrivateMediaFileAPIView,
+    AdminBusinessPrivateMediaURLAPIView,
+    AdminBusinessVerifyAPIView,
+    AdminOrderPatchAPIView,
+    AdminReportDetailAPIView,
+    AdminReportListAPIView,
+    AdminReportNoteCreateAPIView,
+    AdminReportResolveAPIView,
+)
 from .views_business import (
     BusinessBranchDetailAPIView,
     BusinessBranchListCreateAPIView,
@@ -505,6 +516,21 @@ urlpatterns = [
         name="admin-business-detail",
     ),
     path(
+        "admin/businesses/<int:business_id>/verify",
+        AdminBusinessVerifyAPIView.as_view(),
+        name="admin-business-verify",
+    ),
+    path(
+        "admin/businesses/<int:business_id>/private-media/<str:kind>",
+        AdminBusinessPrivateMediaURLAPIView.as_view(),
+        name="admin-business-private-media-url",
+    ),
+    path(
+        "admin/businesses/<int:business_id>/private-media/<str:kind>/file",
+        AdminBusinessPrivateMediaFileAPIView.as_view(),
+        name="admin-business-private-media-file",
+    ),
+    path(
         "admin/businesses/<int:business_id>/branches",
         AdminBusinessBranchListCreateAPIView.as_view(),
         name="admin-business-branches",
@@ -592,6 +618,11 @@ urlpatterns = [
         name="admin-order-detail",
     ),
     path(
+        "admin/orders/<uuid:public_id>/patch",
+        AdminOrderPatchAPIView.as_view(),
+        name="admin-order-patch",
+    ),
+    path(
         "admin/orders/<uuid:public_id>/status",
         AdminOrderStatusAPIView.as_view(),
         name="admin-order-status",
@@ -600,6 +631,27 @@ urlpatterns = [
         "admin/orders/<uuid:public_id>/payment-proofs/<int:proof_id>/review",
         AdminPaymentProofReviewAPIView.as_view(),
         name="admin-payment-proof-review",
+    ),
+    path("admin/reports", AdminReportListAPIView.as_view(), name="admin-reports"),
+    path(
+        "admin/reports/<int:report_id>",
+        AdminReportDetailAPIView.as_view(),
+        name="admin-report-detail",
+    ),
+    path(
+        "admin/reports/<int:report_id>/notes",
+        AdminReportNoteCreateAPIView.as_view(),
+        name="admin-report-notes",
+    ),
+    path(
+        "admin/reports/<int:report_id>/resolve",
+        AdminReportResolveAPIView.as_view(),
+        name="admin-report-resolve",
+    ),
+    path(
+        "admin/audit-logs",
+        AdminAuditLogListAPIView.as_view(),
+        name="admin-audit-logs",
     ),
     path("admin/reviews", AdminReviewListAPIView.as_view(), name="admin-reviews"),
     path(

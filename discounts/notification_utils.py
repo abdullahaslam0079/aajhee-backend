@@ -367,3 +367,53 @@ def notify_customer_review_reply(review) -> Notification | None:
             "Failed to notify customer about review reply %s", review.id
         )
         return None
+
+
+def notify_merchant_verification(
+    business, *, approved: bool, reason: str = ""
+) -> None:
+    """Email the merchant when admin approves or rejects verification."""
+    owner = getattr(business, "owner", None)
+    email = getattr(owner, "email", None) if owner else None
+    if not email:
+        return
+    if approved:
+        subject = f"Aajhee: {business.name} is verified"
+        lines = [
+            f"Good news — {business.name} has been verified on Aajhee.",
+            "",
+            "Your store can now appear to customers (unless paused).",
+            "Open the Aajhee Business panel to manage products and orders.",
+            "",
+            "— Aajhee",
+        ]
+    else:
+        subject = f"Aajhee: verification update for {business.name}"
+        lines = [
+            f"Your verification request for {business.name} was not approved.",
+            "",
+        ]
+        if reason:
+            lines.extend([f"Reason: {reason}", ""])
+        lines.extend(
+            [
+                "Please update your business profile (phone, WhatsApp, CNIC, "
+                "shop photo or Instagram) and wait for another review.",
+                "",
+                "— Aajhee",
+            ]
+        )
+    try:
+        send_mail(
+            subject=subject,
+            message="\n".join(lines),
+            from_email=settings.DEFAULT_FROM_EMAIL,
+            recipient_list=[email],
+            fail_silently=False,
+        )
+    except Exception:
+        logger.exception(
+            "Failed to email merchant %s about verification for business %s",
+            email,
+            business.id,
+        )

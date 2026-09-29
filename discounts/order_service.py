@@ -23,6 +23,7 @@ from .models import (
     OrderDeliverySnapshot,
     OrderItem,
     OrderPaymentProof,
+    OrderStatusHistory,
     Product,
     ProductEngagementStats,
 )
@@ -342,7 +343,11 @@ def place_orders_from_cart(
                 order_count=stats.order_count + item.quantity
             )
 
-        promised_by = compute_promised_by(option.max_delivery_hours)
+        promised_by = compute_promised_by(
+            option.max_delivery_hours,
+            fulfillment_type=fulfillment_type,
+            cutoff_time=getattr(settings, "same_day_cutoff_time", None),
+        )
         OrderDeliverySnapshot.objects.create(
             order=order,
             fulfillment_type=fulfillment_type,
@@ -359,6 +364,11 @@ def place_orders_from_cart(
                 "same_day_fee": str(settings.same_day_fee),
                 "nationwide_fee": str(settings.nationwide_delivery_fee),
                 "same_day_max_delivery_hours": settings.same_day_max_delivery_hours,
+                "same_day_cutoff_time": (
+                    settings.same_day_cutoff_time.isoformat()
+                    if settings.same_day_cutoff_time
+                    else None
+                ),
                 "nationwide_max_delivery_hours": settings.nationwide_max_delivery_hours,
                 "customer_cancel_policy": settings.customer_cancel_policy,
                 "customer_cancel_window_minutes": settings.customer_cancel_window_minutes,
@@ -395,7 +405,24 @@ def customer_can_cancel(order: Order) -> bool:
     return True
 
 
-def cancel_order(order: Order, *, by: str, reason: str = "") -> Order:
+def record_status_history(
+    order: Order,
+    *,
+    from_status: str,
+    to_status: str,
+    actor=None,
+    note: str = "",
+) -> OrderStatusHistory:
+    return OrderStatusHistory.objects.create(
+        order=order,
+        from_status=from_status or "",
+        to_status=to_status,
+        actor=actor,
+        note=note or "",
+    )
+
+
+def cancel_order(order: Order, *, by: str, reason: str = "", actor=None) -> Order:
     if order.status in (Order.Status.CANCELLED, Order.Status.COMPLETED):
         raise ValidationError({"status": "Order cannot be cancelled."})
     if by == Order.CancelledBy.CUSTOMER and not customer_can_cancel(order):
@@ -424,6 +451,13 @@ def cancel_order(order: Order, *, by: str, reason: str = "") -> Order:
         ]
     )
     if previous_status != Order.Status.CANCELLED:
+        record_status_history(
+            order,
+            from_status=previous_status,
+            to_status=Order.Status.CANCELLED,
+            actor=actor,
+            note=reason or "",
+        )
         from .notification_utils import notify_customer_order_status
 
         notify_customer_order_status(order)
@@ -506,9 +540,16 @@ def allowed_business_transitions(order: Order) -> set[str]:
     return allowed
 
 
-def transition_order_status(order: Order, new_status: str, *, payment_method: str | None = None) -> Order:
+def transition_order_status(
+    order: Order,
+    new_status: str,
+    *,
+    payment_method: str | None = None,
+    actor=None,
+    note: str = "",
+) -> Order:
     if new_status == Order.Status.CANCELLED:
-        return cancel_order(order, by=Order.CancelledBy.BUSINESS)
+        return cancel_order(order, by=Order.CancelledBy.BUSINESS, actor=actor, reason=note)
 
     allowed = allowed_business_transitions(order)
     if new_status not in allowed:
@@ -530,6 +571,8 @@ def transition_order_status(order: Order, new_status: str, *, payment_method: st
             {"status": "Confirm payment before fulfilling this order."}
         )
 
+    previous_status = order.status
+
     if order.status == Order.Status.PENDING and new_status == Order.Status.ACCEPTED:
         order.status = Order.Status.ACCEPTED
         order.customer_cancel_allowed = False
@@ -546,6 +589,13 @@ def transition_order_status(order: Order, new_status: str, *, payment_method: st
                 "updated_at",
             ]
         )
+        record_status_history(
+            order,
+            from_status=previous_status,
+            to_status=order.status,
+            actor=actor,
+            note=note,
+        )
         from .notification_utils import notify_customer_order_status
 
         notify_customer_order_status(order)
@@ -561,6 +611,14 @@ def transition_order_status(order: Order, new_status: str, *, payment_method: st
             order.save(update_fields=["status", "updated_at"])
     else:
         order.save(update_fields=["status", "updated_at"])
+
+    record_status_history(
+        order,
+        from_status=previous_status,
+        to_status=order.status,
+        actor=actor,
+        note=note,
+    )
 
     from .notification_utils import notify_customer_order_status
 
