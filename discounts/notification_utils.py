@@ -5,7 +5,7 @@ import logging
 from django.conf import settings
 from django.core.mail import send_mail
 
-from .fcm import send_fcm_to_tokens
+from .fcm import normalize_fcm_data, send_fcm_to_tokens
 from .models import BusinessLike, DeviceToken, Notification, Offer, Order, UserPreferences
 
 logger = logging.getLogger(__name__)
@@ -26,12 +26,20 @@ def create_and_push_notification(
     body: str,
     data: dict | None = None,
 ) -> Notification:
+    payload = dict(data or {})
+    # Canonical keys always present for clients (inbox JSON + FCM data).
+    payload["type"] = type
+    if "order_public_id" not in payload and payload.get("order_id"):
+        order_id = str(payload["order_id"]).strip()
+        if order_id and not order_id.isdigit():
+            payload["order_public_id"] = order_id
+
     notification = Notification.objects.create(
         user_id=user_id,
         type=type,
         title=title,
         body=body,
-        data=data or {},
+        data=payload,
     )
 
     if not _notifications_enabled_for(user_id):
@@ -41,15 +49,18 @@ def create_and_push_notification(
         DeviceToken.objects.filter(user_id=user_id).values_list("token", flat=True)
     )
     if tokens:
+        fcm_data = normalize_fcm_data(
+            {
+                **payload,
+                "notification_id": notification.id,
+                "type": type,
+            }
+        )
         send_fcm_to_tokens(
             tokens=tokens,
             title=title,
             body=body,
-            data={
-                **(data or {}),
-                "notification_id": notification.id,
-                "type": type,
-            },
+            data=fcm_data,
         )
     return notification
 

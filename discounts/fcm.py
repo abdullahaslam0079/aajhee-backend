@@ -2,6 +2,10 @@
 
 Push is best-effort: if credentials are missing or firebase-admin is not
 installed, calls no-op so the in-app inbox still works.
+
+Canonical data keys (all string values for FCM):
+  type, notification_id, order_public_id, business_id, branch_id, route
+plus optional context keys (status, payment_status, offer_id, etc.).
 """
 
 from __future__ import annotations
@@ -12,6 +16,68 @@ from typing import Any
 from .firebase_app import get_firebase_app
 
 logger = logging.getLogger(__name__)
+
+# Keys clients rely on for routing / refresh. Always stringified when present.
+CANONICAL_FCM_DATA_KEYS = (
+    "type",
+    "notification_id",
+    "order_public_id",
+    "business_id",
+    "branch_id",
+    "route",
+    "status",
+    "payment_status",
+    "offer_id",
+    "review_id",
+    "product_id",
+    "order_id",
+)
+
+
+def normalize_fcm_data(data: dict[str, Any] | None) -> dict[str, str]:
+    """Return FCM-safe string data with stable key names."""
+    raw = dict(data or {})
+    out: dict[str, str] = {}
+
+    for key in CANONICAL_FCM_DATA_KEYS:
+        if key not in raw or raw[key] is None:
+            continue
+        value = str(raw[key]).strip()
+        if value:
+            out[key] = value
+
+    # Prefer UUID public id; copy from order_id when it looks like a UUID.
+    if "order_public_id" not in out:
+        order_id = out.get("order_id", "")
+        if order_id and not order_id.isdigit():
+            out["order_public_id"] = order_id
+
+    # Include any extra keys as strings so callers are not silently dropped.
+    for key, value in raw.items():
+        if key in out or value is None:
+            continue
+        text = str(value).strip()
+        if text:
+            out[str(key)] = text
+
+    return out
+
+
+def _is_invalid_token_error(exc: Exception) -> bool:
+    name = type(exc).__name__
+    if name in {"UnregisteredError", "SenderIdMismatchError"}:
+        return True
+    code = getattr(exc, "code", None) or getattr(exc, "cause", None)
+    code_text = str(code or exc).upper()
+    return any(
+        token in code_text
+        for token in (
+            "UNREGISTERED",
+            "NOT_FOUND",
+            "REGISTRATION-TOKEN-NOT-REGISTERED",
+            "INVALID_REGISTRATION",
+        )
+    )
 
 
 def send_fcm_to_tokens(
@@ -33,11 +99,8 @@ def send_fcm_to_tokens(
     except ImportError:
         return
 
-    # FCM data payload values must be strings.
-    string_data = {
-        str(key): "" if value is None else str(value)
-        for key, value in (data or {}).items()
-    }
+    string_data = normalize_fcm_data(data)
+    stale_tokens: list[str] = []
 
     # Send individually so one bad token does not fail the batch.
     for token in tokens:
@@ -55,4 +118,18 @@ def send_fcm_to_tokens(
         try:
             messaging.send(message, app=app)
         except Exception as exc:
-            logger.warning("FCM send failed for token …%s: %s", token[-8:], exc)
+            if _is_invalid_token_error(exc):
+                stale_tokens.append(token)
+                logger.info("FCM token stale, will remove …%s", token[-8:])
+            else:
+                logger.warning("FCM send failed for token …%s: %s", token[-8:], exc)
+
+    if stale_tokens:
+        try:
+            from .models import DeviceToken
+
+            deleted, _ = DeviceToken.objects.filter(token__in=stale_tokens).delete()
+            if deleted:
+                logger.info("Removed %s invalid FCM device token(s)", deleted)
+        except Exception:
+            logger.exception("Failed to delete stale FCM device tokens")
