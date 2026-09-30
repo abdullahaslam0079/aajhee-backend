@@ -65,6 +65,7 @@ from .serializers_commerce import (
     BranchContactSerializer,
     BranchFulfillmentSettingsSerializer,
 )
+from .views_auth import AuthScopedThrottleMixin
 
 User = get_user_model()
 
@@ -109,7 +110,7 @@ def _support_write_blocked(request):
     return None
 
 
-class AdminLoginAPIView(TokenObtainPairView):
+class AdminLoginAPIView(AuthScopedThrottleMixin, TokenObtainPairView):
     authentication_classes = []
     serializer_class = AdminLoginTokenObtainPairSerializer
 

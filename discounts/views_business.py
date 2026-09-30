@@ -29,9 +29,10 @@ from .serializers_business import (
     OfferRedeemSerializer,
     OfferScanSerializer,
 )
+from .views_auth import AuthScopedThrottleMixin
 
 
-class BusinessRegisterAPIView(generics.CreateAPIView):
+class BusinessRegisterAPIView(AuthScopedThrottleMixin, generics.CreateAPIView):
     authentication_classes = []
     permission_classes = [permissions.AllowAny]
     parser_classes = [MultiPartParser, FormParser, JSONParser]
@@ -53,7 +54,7 @@ class BusinessRegisterAPIView(generics.CreateAPIView):
         )
 
 
-class BusinessLoginAPIView(TokenObtainPairView):
+class BusinessLoginAPIView(AuthScopedThrottleMixin, TokenObtainPairView):
     authentication_classes = []
     serializer_class = BusinessLoginTokenObtainPairSerializer
 

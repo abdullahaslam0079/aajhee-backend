@@ -84,6 +84,15 @@ def add_or_update_cart_item(
         raise ValidationError({"branch_id": "Branch does not belong to this product's business."})
     if branch and product.branches.exists() and not product.branches.filter(id=branch.id).exists():
         raise ValidationError({"branch_id": "Product is not available at this branch."})
+    # Soft check only — final lock + decrement happens at checkout.
+    if product.stock_quantity is not None and quantity > product.stock_quantity:
+        raise ValidationError(
+            {
+                "quantity": (
+                    f"Only {product.stock_quantity} left in stock for {product.name}."
+                )
+            }
+        )
 
     item, created = CartItem.objects.get_or_create(
         cart=cart,
@@ -95,6 +104,44 @@ def add_or_update_cart_item(
         item.quantity = quantity
         item.save(update_fields=["quantity", "updated_at"])
     return item
+
+
+def _assert_and_decrement_stock(product_id: int, quantity: int) -> Product:
+    """Lock product row and decrement tracked stock. None stock = unlimited."""
+    product = Product.objects.select_for_update().get(pk=product_id)
+    if product.stock_quantity is None:
+        return product
+    if quantity > product.stock_quantity:
+        raise ValidationError(
+            {
+                "quantity": (
+                    f"Only {product.stock_quantity} left in stock for {product.name}."
+                )
+            }
+        )
+    product.stock_quantity = product.stock_quantity - quantity
+    update_fields = ["stock_quantity", "updated_at"]
+    if product.stock_quantity == 0 and product.is_available:
+        product.is_available = False
+        update_fields.append("is_available")
+    product.save(update_fields=update_fields)
+    return product
+
+
+def _restore_stock_for_order(order: Order) -> None:
+    """Return order line quantities to product stock (tracked products only)."""
+    for item in order.items.select_related("product").all():
+        if not item.product_id:
+            continue
+        product = Product.objects.select_for_update().get(pk=item.product_id)
+        if product.stock_quantity is None:
+            continue
+        product.stock_quantity = product.stock_quantity + item.quantity
+        update_fields = ["stock_quantity", "updated_at"]
+        if product.is_enabled and not product.is_available:
+            product.is_available = True
+            update_fields.append("is_available")
+        product.save(update_fields=update_fields)
 
 
 def _build_delivery_address_text(
@@ -327,6 +374,7 @@ def place_orders_from_cart(
         )
 
         for item in lines:
+            _assert_and_decrement_stock(item.product_id, item.quantity)
             base, sale, percent = _unit_prices(item.product)
             OrderItem.objects.create(
                 order=order,
@@ -422,6 +470,7 @@ def record_status_history(
     )
 
 
+@transaction.atomic
 def cancel_order(order: Order, *, by: str, reason: str = "", actor=None) -> Order:
     if order.status in (Order.Status.CANCELLED, Order.Status.COMPLETED):
         raise ValidationError({"status": "Order cannot be cancelled."})
@@ -451,6 +500,7 @@ def cancel_order(order: Order, *, by: str, reason: str = "", actor=None) -> Orde
         ]
     )
     if previous_status != Order.Status.CANCELLED:
+        _restore_stock_for_order(order)
         record_status_history(
             order,
             from_status=previous_status,

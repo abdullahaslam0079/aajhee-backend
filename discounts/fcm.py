@@ -100,11 +100,8 @@ def send_fcm_to_tokens(
         return
 
     string_data = normalize_fcm_data(data)
-    stale_tokens: list[str] = []
-
-    # Send individually so one bad token does not fail the batch.
-    for token in tokens:
-        message = messaging.Message(
+    messages = [
+        messaging.Message(
             token=token,
             notification=messaging.Notification(title=title, body=body),
             data=string_data,
@@ -115,14 +112,37 @@ def send_fcm_to_tokens(
                 )
             ),
         )
-        try:
-            messaging.send(message, app=app)
-        except Exception as exc:
-            if _is_invalid_token_error(exc):
+        for token in tokens
+    ]
+
+    stale_tokens: list[str] = []
+
+    # Prefer send_each (batch) when available; fall back to sequential send.
+    try:
+        batch = messaging.send_each(messages, app=app)
+        for token, resp in zip(tokens, batch.responses):
+            if resp.success:
+                continue
+            exc = resp.exception
+            if exc is not None and _is_invalid_token_error(exc):
                 stale_tokens.append(token)
                 logger.info("FCM token stale, will remove …%s", token[-8:])
-            else:
+            elif exc is not None:
                 logger.warning("FCM send failed for token …%s: %s", token[-8:], exc)
+    except AttributeError:
+        for token, message in zip(tokens, messages):
+            try:
+                messaging.send(message, app=app)
+            except Exception as exc:
+                if _is_invalid_token_error(exc):
+                    stale_tokens.append(token)
+                    logger.info("FCM token stale, will remove …%s", token[-8:])
+                else:
+                    logger.warning(
+                        "FCM send failed for token …%s: %s", token[-8:], exc
+                    )
+    except Exception:
+        logger.exception("FCM send_each failed; no messages delivered this attempt")
 
     if stale_tokens:
         try:

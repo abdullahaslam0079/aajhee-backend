@@ -2,10 +2,11 @@ from django.contrib.auth import get_user_model
 from rest_framework import generics, permissions, status
 from rest_framework.exceptions import AuthenticationFailed
 from rest_framework.response import Response
+from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.tokens import RefreshToken
-from rest_framework_simplejwt.views import TokenObtainPairView
+from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 
 from .auth_utils import blacklist_user_tokens, logout_response_message
 from .password_reset import request_password_reset
@@ -26,12 +27,21 @@ from .serializers import (
 User = get_user_model()
 
 
-class LoginAPIView(TokenObtainPairView):
+class AuthScopedThrottleMixin:
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "auth"
+
+
+class LoginAPIView(AuthScopedThrottleMixin, TokenObtainPairView):
     authentication_classes = []
     serializer_class = LoginTokenObtainPairSerializer
 
 
-class FirebaseAuthAPIView(APIView):
+class ThrottledTokenRefreshView(AuthScopedThrottleMixin, TokenRefreshView):
+    authentication_classes = []
+
+
+class FirebaseAuthAPIView(AuthScopedThrottleMixin, APIView):
     """Exchange a Firebase Auth ID token (phone/Google/Apple) for Django JWTs."""
 
     authentication_classes = []
@@ -114,7 +124,7 @@ class LogoutAPIView(APIView):
         )
 
 
-class RegisterAPIView(generics.CreateAPIView):
+class RegisterAPIView(AuthScopedThrottleMixin, generics.CreateAPIView):
     """Create a user account."""
 
     queryset = User.objects.all()
@@ -132,7 +142,7 @@ class RegisterAPIView(generics.CreateAPIView):
         )
 
 
-class ForgotPasswordAPIView(generics.GenericAPIView):
+class ForgotPasswordAPIView(AuthScopedThrottleMixin, generics.GenericAPIView):
     serializer_class = ForgotPasswordSerializer
     authentication_classes = []
     permission_classes = [permissions.AllowAny]
@@ -153,7 +163,7 @@ class ForgotPasswordAPIView(generics.GenericAPIView):
         return Response({"message": message, "errors": {}})
 
 
-class ResetPasswordAPIView(generics.GenericAPIView):
+class ResetPasswordAPIView(AuthScopedThrottleMixin, generics.GenericAPIView):
     serializer_class = ResetPasswordSerializer
     authentication_classes = []
     permission_classes = [permissions.AllowAny]

@@ -2216,3 +2216,224 @@ class ProductReviewAPITests(APITestCase):
             format="multipart",
         )
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+
+class StockReservationTests(TestCase):
+    def setUp(self):
+        from .order_service import get_or_create_cart
+        from .models import Product
+
+        self.consumer = User.objects.create_user(
+            email="stock-consumer@example.com",
+            password="testpass123",
+            account_type=User.AccountType.CONSUMER,
+            phone="+923001112233",
+        )
+        self.owner = User.objects.create_user(
+            email="stock-owner@example.com",
+            password="testpass123",
+            account_type=User.AccountType.BUSINESS,
+        )
+        self.category = Category.objects.create(name="Stock Cat")
+        self.business = Business.objects.create(
+            owner=self.owner,
+            name="Stock Shop",
+            category=self.category,
+            verification_status=Business.VerificationStatus.VERIFIED,
+        )
+        self.branch = Branch.objects.create(
+            business=self.business,
+            name="Main",
+            street="Main",
+            house_number="1",
+            postal_code="54000",
+            city="Lahore",
+            latitude=Decimal("31.5204"),
+            longitude=Decimal("74.3587"),
+        )
+        self.tracked = Product.objects.create(
+            business=self.business,
+            category=self.category,
+            name="Tracked Item",
+            base_price=Decimal("100.00"),
+            stock_quantity=5,
+        )
+        self.tracked.branches.add(self.branch)
+        self.unlimited = Product.objects.create(
+            business=self.business,
+            category=self.category,
+            name="Unlimited Item",
+            base_price=Decimal("50.00"),
+            stock_quantity=None,
+        )
+        self.unlimited.branches.add(self.branch)
+        self.cart = get_or_create_cart(self.consumer)
+
+    def test_cart_rejects_quantity_above_stock(self):
+        from rest_framework.exceptions import ValidationError
+
+        from .order_service import add_or_update_cart_item
+
+        with self.assertRaises(ValidationError):
+            add_or_update_cart_item(
+                self.cart, self.tracked, quantity=6, branch=self.branch
+            )
+
+    def test_checkout_decrements_stock_and_marks_unavailable(self):
+        from .location_utils import UserLocation
+        from .order_service import add_or_update_cart_item, place_orders_from_cart
+
+        item = add_or_update_cart_item(
+            self.cart, self.tracked, quantity=5, branch=self.branch
+        )
+        location = UserLocation(
+            latitude=self.branch.latitude,
+            longitude=self.branch.longitude,
+            city="Lahore",
+        )
+        orders = place_orders_from_cart(
+            user=self.consumer,
+            cart=self.cart,
+            groups=[
+                {
+                    "branch_id": self.branch.id,
+                    "item_ids": [item.id],
+                    "fulfillment_type": "pickup",
+                    "payment_method": "cash_on_pickup",
+                    "customer_notes": "",
+                    "delivery_address_text": "",
+                    "delivery_house_number": "",
+                    "delivery_landmark": "",
+                }
+            ],
+            location=location,
+            customer_phone="+923001112233",
+        )
+        self.assertEqual(len(orders), 1)
+        self.tracked.refresh_from_db()
+        self.assertEqual(self.tracked.stock_quantity, 0)
+        self.assertFalse(self.tracked.is_available)
+
+    def test_checkout_rejects_insufficient_stock(self):
+        from rest_framework.exceptions import ValidationError
+
+        from .location_utils import UserLocation
+        from .models import CartItem
+        from .order_service import place_orders_from_cart
+
+        # Bypass soft cart check to simulate race / stale cart.
+        item = CartItem.objects.create(
+            cart=self.cart,
+            product=self.tracked,
+            branch=self.branch,
+            quantity=6,
+        )
+        location = UserLocation(
+            latitude=self.branch.latitude,
+            longitude=self.branch.longitude,
+            city="Lahore",
+        )
+        with self.assertRaises(ValidationError):
+            place_orders_from_cart(
+                user=self.consumer,
+                cart=self.cart,
+                groups=[
+                    {
+                        "branch_id": self.branch.id,
+                        "item_ids": [item.id],
+                        "fulfillment_type": "pickup",
+                        "payment_method": "cash_on_pickup",
+                        "customer_notes": "",
+                        "delivery_address_text": "",
+                        "delivery_house_number": "",
+                        "delivery_landmark": "",
+                    }
+                ],
+                location=location,
+                customer_phone="+923001112233",
+            )
+        self.tracked.refresh_from_db()
+        self.assertEqual(self.tracked.stock_quantity, 5)
+        self.assertTrue(self.tracked.is_available)
+
+    def test_cancel_restores_stock(self):
+        from .location_utils import UserLocation
+        from .models import Order
+        from .order_service import (
+            add_or_update_cart_item,
+            cancel_order,
+            place_orders_from_cart,
+        )
+
+        item = add_or_update_cart_item(
+            self.cart, self.tracked, quantity=2, branch=self.branch
+        )
+        location = UserLocation(
+            latitude=self.branch.latitude,
+            longitude=self.branch.longitude,
+            city="Lahore",
+        )
+        orders = place_orders_from_cart(
+            user=self.consumer,
+            cart=self.cart,
+            groups=[
+                {
+                    "branch_id": self.branch.id,
+                    "item_ids": [item.id],
+                    "fulfillment_type": "pickup",
+                    "payment_method": "cash_on_pickup",
+                    "customer_notes": "",
+                    "delivery_address_text": "",
+                    "delivery_house_number": "",
+                    "delivery_landmark": "",
+                }
+            ],
+            location=location,
+            customer_phone="+923001112233",
+        )
+        self.tracked.refresh_from_db()
+        self.assertEqual(self.tracked.stock_quantity, 3)
+
+        cancel_order(
+            orders[0],
+            by=Order.CancelledBy.CUSTOMER,
+            reason="Changed mind",
+            actor=self.consumer,
+        )
+        self.tracked.refresh_from_db()
+        self.assertEqual(self.tracked.stock_quantity, 5)
+        self.assertTrue(self.tracked.is_available)
+
+    def test_unlimited_stock_not_decremented(self):
+        from .location_utils import UserLocation
+        from .order_service import add_or_update_cart_item, place_orders_from_cart
+
+        item = add_or_update_cart_item(
+            self.cart, self.unlimited, quantity=20, branch=self.branch
+        )
+        location = UserLocation(
+            latitude=self.branch.latitude,
+            longitude=self.branch.longitude,
+            city="Lahore",
+        )
+        place_orders_from_cart(
+            user=self.consumer,
+            cart=self.cart,
+            groups=[
+                {
+                    "branch_id": self.branch.id,
+                    "item_ids": [item.id],
+                    "fulfillment_type": "pickup",
+                    "payment_method": "cash_on_pickup",
+                    "customer_notes": "",
+                    "delivery_address_text": "",
+                    "delivery_house_number": "",
+                    "delivery_landmark": "",
+                }
+            ],
+            location=location,
+            customer_phone="+923001112233",
+        )
+        self.unlimited.refresh_from_db()
+        self.assertIsNone(self.unlimited.stock_quantity)
+        self.assertTrue(self.unlimited.is_available)

@@ -125,7 +125,11 @@ Without these, uploaded logos work briefly then return **404 Not Found** after t
 Redeploy after setting them. Re-upload any logos that already 404’d (those files were lost with the old local disk).
 
 **Build command:** `pip install --retries 15 --timeout 120 -r requirements.txt && python manage.py collectstatic --noinput`  
-**Start command:** `python manage.py migrate --noinput && python manage.py ensure_superuser && gunicorn config.wsgi:application --bind 0.0.0.0:$PORT`
+**Start command:** `python manage.py migrate --noinput && python manage.py ensure_superuser && gunicorn config.wsgi:application --bind 0.0.0.0:$PORT --workers $WEB_CONCURRENCY --timeout 120 --graceful-timeout 30`
+
+**Health check:** `GET /api/health/` → `{"status":"ok"}` (no auth).
+
+Optional env: `SENTRY_DSN`, `WHATSAPP_PROVIDER=twilio` + `TWILIO_*`, `ADMIN_SYNC_PASSWORD=true` only when you want `ensure_superuser` to reset the admin password every boot.
 
 ### Django admin without Shell (Render free tier)
 

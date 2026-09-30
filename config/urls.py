@@ -21,7 +21,7 @@ from django.contrib import admin
 from django.urls import include, path, re_path
 from django.views.static import serve
 from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
-from rest_framework_simplejwt.views import TokenRefreshView, TokenVerifyView
+from rest_framework_simplejwt.views import TokenVerifyView
 
 from discounts.views_auth import (
     ForgotPasswordAPIView,
@@ -31,10 +31,13 @@ from discounts.views_auth import (
     PhoneAuthAPIView,
     RegisterAPIView,
     ResetPasswordAPIView,
+    ThrottledTokenRefreshView,
 )
+from discounts.views_health import HealthCheckAPIView
 
 urlpatterns = [
     path("admin/", admin.site.urls),
+    path("api/health/", HealthCheckAPIView.as_view(), name="health"),
     path("api/schema/", SpectacularAPIView.as_view(), name="schema"),
     path(
         "api/docs/",
@@ -48,7 +51,7 @@ urlpatterns = [
     path("api/auth/logout", LogoutAPIView.as_view(), name="auth-logout"),
     path(
         "api/auth/token/refresh",
-        TokenRefreshView.as_view(),
+        ThrottledTokenRefreshView.as_view(),
         name="auth-token-refresh",
     ),
     path("api/auth/token/verify", TokenVerifyView.as_view(), name="auth-token-verify"),

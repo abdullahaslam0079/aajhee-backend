@@ -9,6 +9,7 @@ from rest_framework import generics, status
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 
 from .delivery_options import get_or_create_fulfillment_settings
@@ -492,6 +493,8 @@ class CheckoutPreviewAPIView(UserLocationContextMixin, APIView):
 class CheckoutPlaceAPIView(UserLocationContextMixin, APIView):
     permission_classes = [IsAuthenticated, IsConsumerAccount]
     parser_classes = [MultiPartParser, FormParser, JSONParser]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "checkout"
 
     def post(self, request):
         import json

@@ -5,8 +5,10 @@ import logging
 from django.conf import settings
 from django.core.mail import send_mail
 
+from .async_notify import run_after_commit
 from .fcm import normalize_fcm_data, send_fcm_to_tokens
 from .models import BusinessLike, DeviceToken, Notification, Offer, Order, UserPreferences
+from .whatsapp import send_twilio_whatsapp
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +58,9 @@ def create_and_push_notification(
                 "type": type,
             }
         )
-        send_fcm_to_tokens(
+        # Inbox row is sync; FCM delivery is after-commit so checkout stays fast.
+        run_after_commit(
+            send_fcm_to_tokens,
             tokens=tokens,
             title=title,
             body=body,
@@ -111,21 +115,41 @@ def _send_business_order_email(order: Order, *, subject: str, intro: str) -> Non
         )
 
 
+def _send_business_order_email_by_id(order_id: int, *, subject: str, intro: str) -> None:
+    order = (
+        Order.objects.select_related("business", "business__owner", "branch", "user")
+        .filter(pk=order_id)
+        .first()
+    )
+    if order is None:
+        return
+    _send_business_order_email(order, subject=subject, intro=intro)
+
+
+def _notify_business_whatsapp_by_id(order_id: int, *, event: str) -> None:
+    order = (
+        Order.objects.select_related("business", "branch")
+        .filter(pk=order_id)
+        .first()
+    )
+    if order is None:
+        return
+    notify_business_whatsapp_or_sms(order, event=event)
+
+
 def notify_business_whatsapp_or_sms(order: Order, *, event: str) -> None:
     """
     Alert the merchant WhatsApp/notification number when configured.
 
-    TODO: Wire WhatsApp Business API / Twilio (or similar) when provider credentials
-    are set (e.g. WHATSAPP_PROVIDER, TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN,
-    TWILIO_WHATSAPP_FROM). Until then this only logs that delivery was skipped.
+    Set WHATSAPP_PROVIDER=twilio plus TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN /
+    TWILIO_WHATSAPP_FROM to enable delivery. Without credentials this only logs.
     """
     business = order.business
     number = (getattr(business, "notification_whatsapp", None) or "").strip()
     if not number:
         return
-    provider = (getattr(settings, "WHATSAPP_PROVIDER", None) or "").strip()
+    provider = (getattr(settings, "WHATSAPP_PROVIDER", None) or "").strip().lower()
     if not provider:
-        # TODO: implement provider send once WHATSAPP_PROVIDER is configured.
         logger.info(
             "WhatsApp/SMS notify skipped (no provider configured): "
             "number=%s event=%s order=%s",
@@ -134,10 +158,26 @@ def notify_business_whatsapp_or_sms(order: Order, *, event: str) -> None:
             order.public_id,
         )
         return
-    # TODO: dispatch to the configured WhatsApp/SMS provider.
+
+    short_id = str(order.public_id)[:8]
+    if event == "payment_proof":
+        body = (
+            f"Aajhee: payment proof for order #{short_id} "
+            f"(Rs {order.total}). Open Business → Orders to review."
+        )
+    else:
+        body = (
+            f"Aajhee: new order #{short_id} · Rs {order.total} · "
+            f"{order.get_fulfillment_type_display()}. Open Business → Orders."
+        )
+
+    if provider == "twilio":
+        send_twilio_whatsapp(to=number, body=body)
+        return
+
     logger.warning(
-        "WhatsApp provider '%s' is set but no send implementation exists yet "
-        "(number=%s event=%s order=%s)",
+        "WhatsApp provider '%s' is not supported "
+        "(number=%s event=%s order=%s). Use WHATSAPP_PROVIDER=twilio.",
         provider,
         number,
         event,
@@ -222,12 +262,13 @@ def notify_business_new_order(order: Order) -> Notification | None:
     except Exception:
         logger.exception("Failed to notify business about order %s", order.public_id)
 
-    _send_business_order_email(
-        order,
+    run_after_commit(
+        _send_business_order_email_by_id,
+        order.id,
         subject=f"New Aajhee order · Rs {order.total}",
         intro="You have a new order on Aajhee.",
     )
-    notify_business_whatsapp_or_sms(order, event="new_order")
+    run_after_commit(_notify_business_whatsapp_by_id, order.id, event="new_order")
     return notification
 
 
@@ -256,12 +297,13 @@ def notify_business_payment_proof(order: Order) -> Notification | None:
             "Failed to notify business about payment proof for %s", order.public_id
         )
 
-    _send_business_order_email(
-        order,
+    run_after_commit(
+        _send_business_order_email_by_id,
+        order.id,
         subject=f"Payment proof · order #{str(order.public_id)[:8]}",
         intro="A customer submitted a payment proof for review.",
     )
-    notify_business_whatsapp_or_sms(order, event="payment_proof")
+    run_after_commit(_notify_business_whatsapp_by_id, order.id, event="payment_proof")
     return notification
 
 
