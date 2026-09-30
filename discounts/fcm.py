@@ -86,9 +86,10 @@ def send_fcm_to_tokens(
     title: str,
     body: str,
     data: dict[str, Any] | None = None,
-) -> None:
+) -> int:
+    """Send FCM to tokens. Returns number of successful deliveries."""
     if not tokens:
-        return
+        return 0
 
     app = get_firebase_app()
     if app is None:
@@ -96,12 +97,12 @@ def send_fcm_to_tokens(
             "FCM skipped: Firebase Admin not configured "
             "(set FIREBASE_CREDENTIALS_JSON or FIREBASE_CREDENTIALS_PATH)."
         )
-        return
+        return 0
 
     try:
         from firebase_admin import messaging
     except ImportError:
-        return
+        return 0
 
     string_data = normalize_fcm_data(data)
     messages = [
@@ -130,6 +131,7 @@ def send_fcm_to_tokens(
     ]
 
     stale_tokens: list[str] = []
+    success = 0
 
     # Prefer send_each (batch) when available; fall back to sequential send.
     logger.info(
@@ -155,6 +157,7 @@ def send_fcm_to_tokens(
         for token, message in zip(tokens, messages):
             try:
                 messaging.send(message, app=app)
+                success += 1
             except Exception as exc:
                 if _is_invalid_token_error(exc):
                     stale_tokens.append(token)
@@ -175,3 +178,5 @@ def send_fcm_to_tokens(
                 logger.info("Removed %s invalid FCM device token(s)", deleted)
         except Exception:
             logger.exception("Failed to delete stale FCM device tokens")
+
+    return success
