@@ -50,7 +50,13 @@ def create_and_push_notification(
     tokens = list(
         DeviceToken.objects.filter(user_id=user_id).values_list("token", flat=True)
     )
-    if tokens:
+    if not tokens:
+        logger.info(
+            "FCM skipped: no DeviceToken rows for user_id=%s (inbox row %s still created)",
+            user_id,
+            notification.id,
+        )
+    elif tokens:
         fcm_data = normalize_fcm_data(
             {
                 **payload,

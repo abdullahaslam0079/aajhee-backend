@@ -92,6 +92,10 @@ def send_fcm_to_tokens(
 
     app = get_firebase_app()
     if app is None:
+        logger.warning(
+            "FCM skipped: Firebase Admin not configured "
+            "(set FIREBASE_CREDENTIALS_JSON or FIREBASE_CREDENTIALS_PATH)."
+        )
         return
 
     try:
@@ -128,8 +132,16 @@ def send_fcm_to_tokens(
     stale_tokens: list[str] = []
 
     # Prefer send_each (batch) when available; fall back to sequential send.
+    logger.info(
+        "FCM sending to %s device(s) title=%r type=%s",
+        len(tokens),
+        title,
+        string_data.get("type"),
+    )
     try:
         batch = messaging.send_each(messages, app=app)
+        success = sum(1 for r in batch.responses if r.success)
+        logger.info("FCM send_each done: %s/%s succeeded", success, len(tokens))
         for token, resp in zip(tokens, batch.responses):
             if resp.success:
                 continue
