@@ -27,8 +27,9 @@ def _send_fcm_after_commit(
     title: str,
     body: str,
     data: dict,
+    apns_tokens: list[str] | None = None,
 ) -> None:
-    """Send FCM on the request thread after commit.
+    """Send FCM on the request thread after commit; APNs fallback for iOS.
 
     Daemon background threads are unreliable on Render/Gunicorn (worker can
     recycle before the push finishes). FCM send_each is typically <500ms.
@@ -36,9 +37,36 @@ def _send_fcm_after_commit(
 
     def _send() -> None:
         try:
-            send_fcm_to_tokens(tokens=tokens, title=title, body=body, data=data)
+            sent = send_fcm_to_tokens(
+                tokens=tokens, title=title, body=body, data=data
+            )
+            if sent > 0:
+                return
+            # FCM failed or not configured — try native APNs for iOS devices.
+            from .apns import send_apns_to_tokens
+
+            apns = [t for t in (apns_tokens or []) if t]
+            if not apns:
+                logger.info(
+                    "Push: FCM delivered 0 and no APNs tokens for fallback "
+                    "(title=%r type=%s)",
+                    title,
+                    (data or {}).get("type"),
+                )
+                return
+            apns_sent = send_apns_to_tokens(
+                tokens=apns, title=title, body=body, data=data
+            )
+            if apns_sent < 1:
+                logger.warning(
+                    "Push: FCM and APNs both failed to deliver "
+                    "(fcm_tokens=%s apns_tokens=%s title=%r)",
+                    len(tokens),
+                    len(apns),
+                    title,
+                )
         except Exception:
-            logger.exception("FCM on_commit send failed")
+            logger.exception("FCM/APNs on_commit send failed")
 
     try:
         transaction.on_commit(_send)
@@ -80,12 +108,17 @@ def create_and_push_notification(
         )
         return notification
 
-    tokens = list(
-        DeviceToken.objects.filter(user_id=user_id).values_list("token", flat=True)
-    )
-    if not tokens:
+    devices = list(DeviceToken.objects.filter(user_id=user_id))
+    tokens = [d.token for d in devices if d.token]
+    apns_tokens = [
+        d.apns_token
+        for d in devices
+        if d.platform == DeviceToken.Platform.IOS and (d.apns_token or "").strip()
+    ]
+    if not tokens and not apns_tokens:
         logger.info(
-            "FCM skipped: no DeviceToken rows for user_id=%s (inbox row %s still created)",
+            "Push skipped: no DeviceToken rows for user_id=%s "
+            "(inbox row %s still created)",
             user_id,
             notification.id,
         )
@@ -103,6 +136,7 @@ def create_and_push_notification(
         title=title,
         body=body,
         data=fcm_data,
+        apns_tokens=apns_tokens,
     )
     return notification
 

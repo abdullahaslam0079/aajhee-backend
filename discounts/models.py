@@ -859,6 +859,9 @@ class DeviceToken(models.Model):
         User, on_delete=models.CASCADE, related_name="device_tokens"
     )
     token = models.CharField(max_length=512, unique=True)
+    # Native APNs device token (hex). Optional iOS fallback when FCM Admin
+    # cannot send (IAM / API). Android leaves this empty.
+    apns_token = models.CharField(max_length=128, blank=True, default="")
     platform = models.CharField(max_length=16, choices=Platform.choices)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

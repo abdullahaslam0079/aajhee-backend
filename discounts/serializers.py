@@ -937,15 +937,25 @@ class UserPreferencesSerializer(serializers.ModelSerializer):
 class DeviceTokenSerializer(serializers.Serializer):
     token = serializers.CharField(max_length=512)
     platform = serializers.ChoiceField(choices=DeviceToken.Platform.choices)
+    apns_token = serializers.CharField(
+        max_length=128, required=False, allow_blank=True, default=""
+    )
 
     def create(self, validated_data):
         user = self.context["request"].user
         token = validated_data["token"]
         platform = validated_data["platform"]
-        device, _ = DeviceToken.objects.update_or_create(
+        apns_token = (validated_data.get("apns_token") or "").strip()
+        defaults = {"user": user, "platform": platform}
+        if apns_token:
+            defaults["apns_token"] = apns_token
+        device, created = DeviceToken.objects.update_or_create(
             token=token,
-            defaults={"user": user, "platform": platform},
+            defaults=defaults,
         )
+        if not created and apns_token and device.apns_token != apns_token:
+            device.apns_token = apns_token
+            device.save(update_fields=["apns_token", "updated_at"])
         return device
 
 
