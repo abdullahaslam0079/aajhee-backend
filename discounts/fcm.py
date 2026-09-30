@@ -105,11 +105,21 @@ def send_fcm_to_tokens(
             token=token,
             notification=messaging.Notification(title=title, body=body),
             data=string_data,
-            android=messaging.AndroidConfig(priority="high"),
+            android=messaging.AndroidConfig(
+                priority="high",
+                notification=messaging.AndroidNotification(
+                    # Must match Flutter PushNotificationService / AndroidManifest.
+                    channel_id="aajhee_default",
+                    priority="high",
+                    default_sound=True,
+                    default_vibrate_timings=True,
+                ),
+            ),
             apns=messaging.APNSConfig(
+                headers={"apns-priority": "10"},
                 payload=messaging.APNSPayload(
                     aps=messaging.Aps(sound="default", badge=1),
-                )
+                ),
             ),
         )
         for token in tokens
