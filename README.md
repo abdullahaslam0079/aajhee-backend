@@ -176,11 +176,18 @@ Hook that command to a Render Cron job or GitHub Action when you want nightly re
 
 `python manage.py migrate --noinput && python manage.py ensure_superuser && gunicorn config.wsgi:application --bind 0.0.0.0:$PORT`
 
-Do **not** rely on `seed_test_data` for data — it is a deprecated no-op kept only so older start commands do not fail deploys. Prefer updating Start Command to remove it entirely:
+**Local demo data** (admin, merchants, products, orders, reviews):
+
+```bash
+python manage.py seed_test_data
+```
+
+Password for all seeded accounts: `Bscs@0079`. Admin: `abdullah@gmail.com`.  
+Merchants: `merchant.*@aajhee.test`. Consumers: `consumer@aajhee.test`, `fatima@aajhee.test`, `hassan@aajhee.test`.
+
+On Render, seeding is skipped unless `SEED_TEST_DATA=true` (or `--force`). Prefer Start Command:
 
 `python manage.py migrate --noinput && python manage.py ensure_superuser && gunicorn config.wsgi:application --bind 0.0.0.0:$PORT`
-
-If deploy fails with `Unknown command: 'seed_test_data'`, push the latest code (includes the no-op command) or update Start Command in the Render dashboard, then redeploy.
 
 After deploy, **Logs** should mention `Created superuser`, `Promoted`, or `Synced password`. If you only see Gunicorn lines, the command above is not running.
 
