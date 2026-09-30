@@ -4,6 +4,7 @@ import logging
 
 from django.conf import settings
 from django.core.mail import send_mail
+from django.db import transaction
 
 from .async_notify import run_after_commit
 from .fcm import normalize_fcm_data, send_fcm_to_tokens
@@ -18,6 +19,32 @@ def _notifications_enabled_for(user_id: int) -> bool:
     if prefs is None:
         return True
     return prefs.notifications_enabled
+
+
+def _send_fcm_after_commit(
+    *,
+    tokens: list[str],
+    title: str,
+    body: str,
+    data: dict,
+) -> None:
+    """Send FCM on the request thread after commit.
+
+    Daemon background threads are unreliable on Render/Gunicorn (worker can
+    recycle before the push finishes). FCM send_each is typically <500ms.
+    """
+
+    def _send() -> None:
+        try:
+            send_fcm_to_tokens(tokens=tokens, title=title, body=body, data=data)
+        except Exception:
+            logger.exception("FCM on_commit send failed")
+
+    try:
+        transaction.on_commit(_send)
+    except Exception:
+        logger.exception("FCM on_commit scheduling failed; sending inline")
+        _send()
 
 
 def create_and_push_notification(
@@ -45,6 +72,12 @@ def create_and_push_notification(
     )
 
     if not _notifications_enabled_for(user_id):
+        logger.info(
+            "FCM skipped: notifications_enabled=False for user_id=%s "
+            "(inbox row %s still created)",
+            user_id,
+            notification.id,
+        )
         return notification
 
     tokens = list(
@@ -56,22 +89,21 @@ def create_and_push_notification(
             user_id,
             notification.id,
         )
-    elif tokens:
-        fcm_data = normalize_fcm_data(
-            {
-                **payload,
-                "notification_id": notification.id,
-                "type": type,
-            }
-        )
-        # Inbox row is sync; FCM delivery is after-commit so checkout stays fast.
-        run_after_commit(
-            send_fcm_to_tokens,
-            tokens=tokens,
-            title=title,
-            body=body,
-            data=fcm_data,
-        )
+        return notification
+
+    fcm_data = normalize_fcm_data(
+        {
+            **payload,
+            "notification_id": notification.id,
+            "type": type,
+        }
+    )
+    _send_fcm_after_commit(
+        tokens=tokens,
+        title=title,
+        body=body,
+        data=fcm_data,
+    )
     return notification
 
 
