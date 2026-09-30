@@ -1,9 +1,10 @@
-"""Seed rich local demo data for commerce testing.
+"""Seed realistic Lahore demo catalog for commerce testing.
 
-Creates admin, merchants, consumers, products, carts, orders, reviews, and likes.
-Idempotent: safe to re-run (upserts by email / business name / product name).
+Creates admin, merchants, consumers, products (with real photos), carts,
+orders, reviews, and likes.
 
-On Render, only runs when SEED_TEST_DATA=true (avoids polluting production).
+On Render, only runs when SEED_TEST_DATA=true (or --force).
+Use --refresh to replace placeholder images / old product names.
 """
 
 from __future__ import annotations
@@ -14,7 +15,6 @@ from decimal import Decimal
 
 from django.contrib.auth import get_user_model
 from django.core.management.base import BaseCommand
-from django.db import transaction
 from django.utils import timezone
 from django.utils.text import slugify
 
@@ -49,13 +49,13 @@ from discounts.seed_utils import (
     DEMO_PASSWORD,
     LIVE_BUSINESSES,
     ROOT_CATEGORIES,
-    generate_seed_image,
+    download_image_or_none,
 )
 
 
 class Command(BaseCommand):
     help = (
-        "Seed demo admin, merchants, consumers, products, orders, and reviews "
+        "Seed realistic demo admin, merchants, products (real photos), orders "
         f"(password for all demo accounts: {DEMO_PASSWORD})."
     )
 
@@ -64,6 +64,14 @@ class Command(BaseCommand):
             "--force",
             action="store_true",
             help="Run even on Render without SEED_TEST_DATA.",
+        )
+        parser.add_argument(
+            "--refresh",
+            action="store_true",
+            help=(
+                "Replace demo products/images and rebuild demo orders "
+                "(use after upgrading from placeholder graphics)."
+            ),
         )
 
     def handle(self, *args, **options):
@@ -81,16 +89,16 @@ class Command(BaseCommand):
             )
             return
 
-        with transaction.atomic():
-            categories = self._seed_categories()
-            country = get_or_create_default_country()
-            lahore = get_or_create_city("Lahore", country=country)
-            admin = self._seed_admin()
-            merchants = self._seed_businesses(categories, lahore)
-            consumers = self._seed_consumers(categories, lahore)
-            self._seed_engagement(consumers, merchants)
-            self._seed_carts(consumers, merchants)
-            self._seed_orders(consumers, merchants, lahore, admin)
+        self.refresh = bool(options["refresh"])
+        categories = self._seed_categories()
+        country = get_or_create_default_country()
+        lahore = get_or_create_city("Lahore", country=country)
+        admin = self._seed_admin()
+        merchants = self._seed_businesses(categories, lahore)
+        consumers = self._seed_consumers(categories, lahore)
+        self._seed_engagement(consumers, merchants)
+        self._seed_carts(consumers, merchants)
+        self._seed_orders(consumers, merchants, lahore, admin)
 
         self.stdout.write(self.style.SUCCESS("Seed data created/updated successfully."))
         self.stdout.write(f"Admin     -> {ADMIN_EMAIL} / {DEMO_PASSWORD}")
@@ -206,15 +214,22 @@ class Command(BaseCommand):
             business.is_paused = False
             business.deleted_at = None
             business.business_hours = DEFAULT_BUSINESS_HOURS
-            if not business.logo:
-                business.logo.save(
-                    f"{payload['slug']}-logo.png",
-                    generate_seed_image(
-                        payload["name"], category.name, f"{payload['slug']}-logo.png"
-                    ),
-                    save=False,
-                )
             business.save()
+
+            logo_url = payload.get("logo_url")
+            if logo_url and (self.refresh or not business.logo):
+                logo_file = download_image_or_none(
+                    logo_url, f"{payload['slug']}-logo.jpg"
+                )
+                if logo_file:
+                    if business.logo:
+                        business.logo.delete(save=False)
+                    business.logo.save(logo_file.name, logo_file, save=True)
+                else:
+                    self.stdout.write(
+                        self.style.WARNING(f"Logo download failed: {payload['name']}")
+                    )
+
             BusinessCategory.objects.get_or_create(business=business, category=category)
             BusinessEngagementStats.objects.get_or_create(business=business)
 
@@ -265,18 +280,29 @@ class Command(BaseCommand):
                         "customer_cancel_window_minutes": 30,
                         "bank_transfer_enabled": True,
                         "bank_transfer_instructions": (
-                            "Transfer to HBL A/C 1234-5678901 (GreenBasket Demo). "
+                            f"Transfer to HBL A/C 1234-5678901 ({payload['name']}). "
                             "Use order ID as reference."
                         ),
                         "jazzcash_enabled": True,
-                        "jazzcash_instructions": "Send to 0300-1111001 and upload proof.",
+                        "jazzcash_instructions": (
+                            f"Send to {payload['phone'].lstrip('+')} and upload proof."
+                        ),
                         "easypaisa_enabled": True,
-                        "easypaisa_instructions": "Send to 0300-1111001 and upload proof.",
+                        "easypaisa_instructions": (
+                            f"Send to {payload['phone'].lstrip('+')} and upload proof."
+                        ),
                         "cash_on_pickup_enabled": True,
                         "cash_on_delivery_enabled": True,
                     },
                 )
                 branches.append(branch)
+
+            if self.refresh:
+                deleted, _ = Product.objects.filter(business=business).delete()
+                if deleted:
+                    self.stdout.write(
+                        f"  Cleared {deleted} old product rows for {payload['name']}"
+                    )
 
             products = []
             for index, product_data in enumerate(payload["products"], start=1):
@@ -306,21 +332,28 @@ class Command(BaseCommand):
                     },
                 )
                 product.branches.set(branches)
-                if created or not product.image:
-                    product.image.save(
-                        f"{payload['slug']}-product-{index}.png",
-                        generate_seed_image(
-                            product_data["name"],
-                            payload["name"],
-                            f"{payload['slug']}-product-{index}.png",
-                        ),
-                        save=True,
+
+                image_url = product_data.get("image_url")
+                if image_url and (created or self.refresh or not product.image):
+                    image_file = download_image_or_none(
+                        image_url, f"{payload['slug']}-product-{index}.jpg"
                     )
+                    if image_file:
+                        if product.image:
+                            product.image.delete(save=False)
+                        product.image.save(image_file.name, image_file, save=True)
+                    else:
+                        self.stdout.write(
+                            self.style.WARNING(
+                                f"  Image download failed: {product_data['name']}"
+                            )
+                        )
+
                 stats, _ = ProductEngagementStats.objects.get_or_create(product=product)
-                if stats.view_count == 0:
-                    stats.view_count = 20 + index * 7
-                    stats.like_count = index
-                    stats.order_count = index
+                if stats.view_count == 0 or self.refresh:
+                    stats.view_count = 40 + index * 11
+                    stats.like_count = 3 + index
+                    stats.order_count = index * 2
                     stats.save(
                         update_fields=["view_count", "like_count", "order_count"]
                     )
@@ -618,11 +651,15 @@ class Command(BaseCommand):
         ali, fatima = consumers[0], consumers[1]
         hassan = consumers[2] if len(consumers) > 2 else ali
 
-        # Avoid duplicating seed orders on re-run: skip if demo user already has orders
-        if Order.objects.filter(user=ali).exists():
+        demo_emails = {c["email"] for c in CONSUMERS}
+        if self.refresh:
+            deleted, _ = Order.objects.filter(user__email__in=demo_emails).delete()
+            self.stdout.write(f"Cleared {deleted} demo orders for refresh.")
+        elif Order.objects.filter(user=ali).exists():
             self.stdout.write(
                 self.style.NOTICE(
-                    "Orders already exist for consumer@aajhee.test — skipping order seed."
+                    "Orders already exist for consumer@aajhee.test — skipping order seed "
+                    "(pass --refresh to rebuild)."
                 )
             )
             return
@@ -676,7 +713,7 @@ class Command(BaseCommand):
                 payment_method=Order.PaymentMethod.CASH_ON_DELIVERY,
                 delivery_fee=Decimal("150.00"),
                 review_rating=5,
-                review_comment="Fresh rice, fast delivery!",
+                review_comment="Basmati was fragrant and arrived cold-packed. Will order again.",
                 hours_ago=48,
             ),
             # Fatima — beauty / fashion

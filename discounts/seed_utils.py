@@ -1,18 +1,17 @@
-"""Demo seed payloads and placeholder image helpers for local testing."""
+"""Realistic Lahore demo catalog + remote image download for seeding."""
 
 from __future__ import annotations
 
-import hashlib
+import urllib.error
+import urllib.request
 from io import BytesIO
 
 from django.core.files.base import ContentFile
-from PIL import Image, ImageDraw, ImageFont
 
 # Shared password for admin, merchants, and consumers in seed data.
 DEMO_PASSWORD = "Bscs@0079"
 ADMIN_EMAIL = "abdullah@gmail.com"
 
-# Canonical root categories (slug → name); matches migration 0032.
 ROOT_CATEGORIES = [
     ("Grocery & Food", "grocery-food", 10),
     ("Electronics", "electronics", 20),
@@ -34,21 +33,30 @@ DEFAULT_BUSINESS_HOURS = {
     "sun": {"open": "12:00", "close": "21:00", "closed": False},
 }
 
-# Merchants / product catalogs. Coordinates are Lahore-area.
+
+def _img(photo_id: str) -> str:
+    return (
+        f"https://images.unsplash.com/{photo_id}"
+        f"?auto=format&fit=crop&w=900&h=900&q=80&fm=jpg"
+    )
+
+
+# Merchants / product catalogs — Lahore market feel, real Unsplash photos.
 LIVE_BUSINESSES = [
     {
         "slug": "greenbasket",
-        "name": "GreenBasket",
+        "name": "Al-Noor Fresh Mart",
         "email": "merchant.greenbasket@aajhee.test",
         "category_slug": "grocery-food",
         "phone": "+923001111001",
-        "instagram_url": "https://instagram.com/greenbasket.demo",
+        "instagram_url": "https://instagram.com/alnoorfresh",
         "presence_mode": "hybrid",
+        "logo_url": _img("photo-1542838132-92c53300491e"),
         "branches": [
             {
                 "name": "Johar Town",
-                "street": "Rashid Minhas Road",
-                "house_number": "66",
+                "street": "Abul Hassan Isphahani Road",
+                "house_number": "Shop 14",
                 "postal_code": "54782",
                 "city": "Lahore",
                 "lat": "31.469700",
@@ -57,9 +65,9 @@ LIVE_BUSINESSES = [
                 "same_day_areas": "Johar Town, DHA, Gulberg, Model Town",
             },
             {
-                "name": "Gulberg",
-                "street": "Main Boulevard",
-                "house_number": "12",
+                "name": "Gulberg III",
+                "street": "Main Boulevard Gulberg",
+                "house_number": "12-B",
                 "postal_code": "54660",
                 "city": "Lahore",
                 "lat": "31.510500",
@@ -70,48 +78,56 @@ LIVE_BUSINESSES = [
         ],
         "products": [
             {
-                "name": "Organic Fruit Box",
-                "description": "Seasonal organic fruits, weekly box.",
-                "base_price": "2500.00",
-                "sale_price": "1750.00",
+                "name": "Seasonal Fruit Tray (3kg)",
+                "description": (
+                    "Hand-picked seasonal mix — apples, bananas, oranges and "
+                    "whatever is freshest at the sabzi mandi this morning."
+                ),
+                "base_price": "2200.00",
+                "sale_price": "1890.00",
                 "stock": 40,
+                "image_url": _img("photo-1610832958506-aa56368176cf"),
             },
             {
-                "name": "Fresh Milk 1L",
-                "description": "Farm-fresh full cream milk.",
-                "base_price": "320.00",
+                "name": "Olper's Full Cream Milk 1L",
+                "description": "Chilled full cream milk, delivery same day if ordered before 6pm.",
+                "base_price": "340.00",
                 "sale_price": None,
                 "stock": 120,
+                "image_url": _img("photo-1550583724-b2692b85b150"),
             },
             {
-                "name": "Basmati Rice 5kg",
-                "description": "Premium aged basmati.",
-                "base_price": "2100.00",
-                "sale_price": "1890.00",
+                "name": "Super Kernel Basmati 5kg",
+                "description": "Aged kernel basmati — long grain, fragrant, for daily daawat cooking.",
+                "base_price": "2450.00",
+                "sale_price": "2199.00",
                 "stock": 55,
+                "image_url": _img("photo-1536304993881-ff6e9eefa2a6"),
             },
             {
-                "name": "Chicken Breast 1kg",
-                "description": "Boneless chicken breast.",
-                "base_price": "980.00",
-                "sale_price": "880.00",
+                "name": "Boneless Chicken Breast 1kg",
+                "description": "Fresh boneless breast, cleaned and packed in-store. Keep refrigerated.",
+                "base_price": "1050.00",
+                "sale_price": "960.00",
                 "stock": 30,
+                "image_url": _img("photo-1604503468506-a8da13d82791"),
             },
         ],
     },
     {
         "slug": "techhive",
-        "name": "TechHive",
+        "name": "Gadget Hub Gulberg",
         "email": "merchant.techhive@aajhee.test",
         "category_slug": "electronics",
         "phone": "+923001111002",
-        "instagram_url": "https://instagram.com/techhive.demo",
+        "instagram_url": "https://instagram.com/gadgethub.lhr",
         "presence_mode": "hybrid",
+        "logo_url": _img("photo-1518770660439-4636190af475"),
         "branches": [
             {
                 "name": "Hafeez Center",
                 "street": "Main Boulevard Gulberg",
-                "house_number": "45",
+                "house_number": "Plaza 45, Shop 208",
                 "postal_code": "54660",
                 "city": "Lahore",
                 "lat": "31.510900",
@@ -122,48 +138,53 @@ LIVE_BUSINESSES = [
         ],
         "products": [
             {
-                "name": "Wireless Earbuds Pro",
-                "description": "Noise-cancelling earbuds with charging case.",
+                "name": "Noise Cancelling Earbuds",
+                "description": "Bluetooth 5.3 earbuds with charging case. 1-year local warranty.",
                 "base_price": "8999.00",
-                "sale_price": "6499.00",
+                "sale_price": "6999.00",
                 "stock": 25,
+                "image_url": _img("photo-1590658268037-6bf12165a8df"),
             },
             {
-                "name": "USB-C Fast Charger 65W",
-                "description": "GaN charger for laptop and phone.",
-                "base_price": "4500.00",
-                "sale_price": "3799.00",
+                "name": "65W GaN Fast Charger",
+                "description": "USB-C PD charger for MacBook, phones and tablets. Includes 1m cable.",
+                "base_price": "4999.00",
+                "sale_price": "3999.00",
                 "stock": 60,
+                "image_url": _img("photo-1583863788434-e58a36330cf0"),
             },
             {
-                "name": "Smart Watch Lite",
-                "description": "Fitness tracking smartwatch.",
-                "base_price": "12500.00",
+                "name": "Fitness Smartwatch",
+                "description": "Heart-rate, SpO2 and sleep tracking. Compatible with iOS & Android.",
+                "base_price": "12999.00",
                 "sale_price": None,
                 "stock": 15,
+                "image_url": _img("photo-1523275335684-37898b6baf30"),
             },
             {
-                "name": "Phone Stand Aluminum",
-                "description": "Adjustable desk phone stand.",
+                "name": "Aluminum Phone Stand",
+                "description": "Adjustable desk stand — works with all phones and small tablets.",
                 "base_price": "1499.00",
                 "sale_price": "999.00",
                 "stock": 80,
+                "image_url": _img("photo-1601784551446-20c9e07cdbdb"),
             },
         ],
     },
     {
         "slug": "style-studio",
-        "name": "Style Studio",
+        "name": "Thread & Loom",
         "email": "merchant.stylestudio@aajhee.test",
         "category_slug": "fashion",
         "phone": "+923001111003",
-        "instagram_url": "https://instagram.com/stylestudio.demo",
+        "instagram_url": "https://instagram.com/threadandloom.pk",
         "presence_mode": "hybrid",
+        "logo_url": _img("photo-1441986300917-64674bd600d8"),
         "branches": [
             {
                 "name": "Packages Mall",
                 "street": "Walton Road",
-                "house_number": "1",
+                "house_number": "LG-22",
                 "postal_code": "54760",
                 "city": "Lahore",
                 "lat": "31.474600",
@@ -174,40 +195,44 @@ LIVE_BUSINESSES = [
         ],
         "products": [
             {
-                "name": "Cotton Kurta Set",
-                "description": "Unstitched cotton kurta with trousers.",
-                "base_price": "4500.00",
-                "sale_price": "3375.00",
+                "name": "Cotton Pret Kurta (Men)",
+                "description": "Breathable cotton pret kurta — sizes S–XXL. Washable at home.",
+                "base_price": "4990.00",
+                "sale_price": "3790.00",
                 "stock": 35,
+                "image_url": _img("photo-1594938298603-c8148c4dae35"),
             },
             {
-                "name": "Denim Jacket",
-                "description": "Classic blue denim jacket.",
-                "base_price": "6200.00",
-                "sale_price": "4999.00",
+                "name": "Classic Denim Jacket",
+                "description": "Medium-wash denim jacket with brass buttons. Unisex fit.",
+                "base_price": "7200.00",
+                "sale_price": "5499.00",
                 "stock": 20,
+                "image_url": _img("photo-1544022613-e87ca75a784a"),
             },
             {
-                "name": "Leather Belt",
-                "description": "Genuine leather belt.",
-                "base_price": "2200.00",
+                "name": "Genuine Leather Belt",
+                "description": "Full-grain leather belt with brushed metal buckle. Black / brown.",
+                "base_price": "2490.00",
                 "sale_price": None,
                 "stock": 45,
+                "image_url": _img("photo-1553062407-98eeb64c6a62"),
             },
         ],
     },
     {
         "slug": "cozynest",
-        "name": "CozyNest",
+        "name": "Ghar Aangan",
         "email": "merchant.cozynest@aajhee.test",
         "category_slug": "home-living",
         "phone": "+923001111004",
-        "instagram_url": "https://instagram.com/cozynest.demo",
+        "instagram_url": "https://instagram.com/gharaangan",
         "presence_mode": "hybrid",
+        "logo_url": _img("photo-1555041469-a586c61ea9bc"),
         "branches": [
             {
                 "name": "Bahria Town",
-                "street": "Commercial Avenue",
+                "street": "Sector C Commercial",
                 "house_number": "18",
                 "postal_code": "53720",
                 "city": "Lahore",
@@ -219,41 +244,45 @@ LIVE_BUSINESSES = [
         ],
         "products": [
             {
-                "name": "Luxury Cushion Set",
-                "description": "Set of 4 decorative cushions.",
-                "base_price": "5000.00",
-                "sale_price": "3000.00",
+                "name": "Velvet Cushion Covers (Set of 4)",
+                "description": "Soft velvet covers with hidden zip — 16x16\". Inserts not included.",
+                "base_price": "4800.00",
+                "sale_price": "3499.00",
                 "stock": 22,
+                "image_url": _img("photo-1584100936595-c0654b55a2e2"),
             },
             {
-                "name": "Ceramic Dinner Set",
-                "description": "12-piece ceramic dinner set.",
-                "base_price": "8900.00",
-                "sale_price": "7120.00",
+                "name": "Ceramic Dinner Set (12 pcs)",
+                "description": "Stoneware plates and bowls for 4 people. Microwave safe.",
+                "base_price": "9200.00",
+                "sale_price": "7499.00",
                 "stock": 12,
+                "image_url": _img("photo-1610701596007-11502861dcfa"),
             },
             {
-                "name": "LED Desk Lamp",
-                "description": "Dimmable LED study lamp.",
-                "base_price": "3200.00",
+                "name": "LED Study Lamp",
+                "description": "Dimmable LED desk lamp with USB port. Warm & cool light modes.",
+                "base_price": "3500.00",
                 "sale_price": None,
                 "stock": 40,
+                "image_url": _img("photo-1507473885765-e6ed057f782c"),
             },
         ],
     },
     {
         "slug": "glamour-box",
-        "name": "Glamour Box",
+        "name": "Noor Beauty Studio",
         "email": "merchant.glamourbox@aajhee.test",
         "category_slug": "beauty",
         "phone": "+923001111005",
-        "instagram_url": "https://instagram.com/glamourbox.demo",
+        "instagram_url": "https://instagram.com/noorbeautystudio",
         "presence_mode": "hybrid",
+        "logo_url": _img("photo-1596462502278-27bfdc403348"),
         "branches": [
             {
                 "name": "MM Alam Road",
                 "street": "MM Alam Road",
-                "house_number": "55",
+                "house_number": "55-A",
                 "postal_code": "54000",
                 "city": "Lahore",
                 "lat": "31.520800",
@@ -264,41 +293,45 @@ LIVE_BUSINESSES = [
         ],
         "products": [
             {
-                "name": "Skincare Starter Kit",
-                "description": "Cleanser, toner, moisturizer trio.",
-                "base_price": "8000.00",
-                "sale_price": "5000.00",
+                "name": "Daily Skincare Trio",
+                "description": "Gentle cleanser, hydrating toner and light moisturizer — for normal/combo skin.",
+                "base_price": "7500.00",
+                "sale_price": "5499.00",
                 "stock": 28,
+                "image_url": _img("photo-1556228578-0d85b1a4d571"),
             },
             {
-                "name": "Matte Lipstick Set",
-                "description": "3-shade matte lipstick pack.",
-                "base_price": "3500.00",
-                "sale_price": "2799.00",
+                "name": "Matte Lipstick Trio",
+                "description": "Three everyday shades — nude, berry and brick. Long-wear formula.",
+                "base_price": "3900.00",
+                "sale_price": "2999.00",
                 "stock": 50,
+                "image_url": _img("photo-1586495777744-4413f21062fa"),
             },
             {
-                "name": "Hair Serum 50ml",
-                "description": "Argan oil hair serum.",
-                "base_price": "1800.00",
+                "name": "Argan Hair Serum 50ml",
+                "description": "Lightweight serum for frizz control and shine. Safe for colour-treated hair.",
+                "base_price": "2100.00",
                 "sale_price": None,
                 "stock": 70,
+                "image_url": _img("photo-1571875257727-256c39da42af"),
             },
         ],
     },
     {
         "slug": "gift-haven",
-        "name": "Gift Haven",
+        "name": "Surprise & Co.",
         "email": "merchant.gifthaven@aajhee.test",
         "category_slug": "gifts",
         "phone": "+923001111006",
-        "instagram_url": "https://instagram.com/gifthaven.demo",
+        "instagram_url": "https://instagram.com/surpriseandco.pk",
         "presence_mode": "hybrid",
+        "logo_url": _img("photo-1549465220-1a8b9238cd48"),
         "branches": [
             {
                 "name": "Emporium Mall",
                 "street": "Jail Road",
-                "house_number": "8",
+                "house_number": "2F-18",
                 "postal_code": "54000",
                 "city": "Lahore",
                 "lat": "31.535600",
@@ -309,36 +342,40 @@ LIVE_BUSINESSES = [
         ],
         "products": [
             {
-                "name": "Personalized Mug",
-                "description": "Custom printed ceramic mug.",
-                "base_price": "1200.00",
-                "sale_price": "899.00",
+                "name": "Custom Name Mug",
+                "description": "Ceramic mug with custom name print. Ready in 24 hours for Lahore orders.",
+                "base_price": "1400.00",
+                "sale_price": "999.00",
                 "stock": 100,
+                "image_url": _img("photo-1514228742587-6b1558fcca3d"),
             },
             {
-                "name": "Gift Hamper Classic",
-                "description": "Chocolates, candles, and a card.",
-                "base_price": "4500.00",
-                "sale_price": "3799.00",
+                "name": "Celebration Gift Hamper",
+                "description": "Chocolates, scented candle, mini plant and a handwritten card.",
+                "base_price": "5500.00",
+                "sale_price": "4499.00",
                 "stock": 18,
+                "image_url": _img("photo-1513885535751-8b9238bd345a"),
             },
             {
-                "name": "Photo Frame Wood",
-                "description": "A4 wooden photo frame.",
-                "base_price": "1600.00",
+                "name": "Wooden Photo Frame (A4)",
+                "description": "Natural wood frame with glass front. Wall or desk stand included.",
+                "base_price": "1800.00",
                 "sale_price": None,
                 "stock": 40,
+                "image_url": _img("photo-1578301978693-85fa9c0320b9"),
             },
         ],
     },
     {
         "slug": "medcare-plus",
-        "name": "MedCare Plus",
+        "name": "CarePlus Pharmacy",
         "email": "merchant.medcare@aajhee.test",
         "category_slug": "health",
         "phone": "+923001111007",
-        "instagram_url": "https://instagram.com/medcare.demo",
-        "presence_mode": "instore_only",
+        "instagram_url": "https://instagram.com/careplus.lhr",
+        "presence_mode": "hybrid",
+        "logo_url": _img("photo-1576602976047-174e57a47881"),
         "branches": [
             {
                 "name": "DHA Phase 5",
@@ -354,25 +391,28 @@ LIVE_BUSINESSES = [
         ],
         "products": [
             {
-                "name": "Vitamin C Pack (30)",
-                "description": "Daily vitamin C tablets.",
-                "base_price": "950.00",
-                "sale_price": "799.00",
+                "name": "Vitamin C 1000mg (30 tabs)",
+                "description": "Daily vitamin C tablets. Imported, sealed pack. Price includes GST.",
+                "base_price": "1150.00",
+                "sale_price": "899.00",
                 "stock": 90,
+                "image_url": _img("photo-1550572017-edd951b55104"),
             },
             {
                 "name": "Digital Thermometer",
-                "description": "Fast-read digital thermometer.",
-                "base_price": "1400.00",
+                "description": "60-second reading, fever alert beep. Battery included.",
+                "base_price": "1600.00",
                 "sale_price": None,
                 "stock": 35,
+                "image_url": _img("photo-1584308666744-24d5c474f2ae"),
             },
             {
-                "name": "First Aid Kit",
-                "description": "Home first-aid essentials.",
-                "base_price": "2800.00",
-                "sale_price": "2399.00",
+                "name": "Home First Aid Kit",
+                "description": "Bandages, antiseptic, gauze, scissors and gloves in a hard case.",
+                "base_price": "3200.00",
+                "sale_price": "2699.00",
                 "stock": 20,
+                "image_url": _img("photo-1603398938378-e54eab446dde"),
             },
         ],
     },
@@ -386,7 +426,7 @@ CONSUMERS = [
         "phone": "+923001222001",
         "preferred_category_slugs": ["grocery-food", "electronics", "fashion"],
         "address": {
-            "street": "Street 12, Block B",
+            "street": "Street 12, Block B, DHA Phase 5",
             "house_number": "42",
             "postal_code": "54792",
             "city": "Lahore",
@@ -394,7 +434,7 @@ CONSUMERS = [
             "latitude": "31.469200",
             "longitude": "74.410500",
             "landmark": "Near Y Block Market",
-            "delivery_instructions": "Call on arrival",
+            "delivery_instructions": "Call on arrival — gate code 4521",
         },
     },
     {
@@ -404,8 +444,8 @@ CONSUMERS = [
         "phone": "+923001222002",
         "preferred_category_slugs": ["beauty", "fashion", "gifts"],
         "address": {
-            "street": "MM Alam Road",
-            "house_number": "88",
+            "street": "MM Alam Road, Gulberg III",
+            "house_number": "House 88",
             "postal_code": "54000",
             "city": "Lahore",
             "county": "Punjab",
@@ -423,7 +463,7 @@ CONSUMERS = [
         "preferred_category_slugs": ["electronics", "home-living"],
         "address": {
             "street": "Main Boulevard Gulberg",
-            "house_number": "15",
+            "house_number": "15-C",
             "postal_code": "54660",
             "city": "Lahore",
             "county": "Punjab",
@@ -436,54 +476,46 @@ CONSUMERS = [
 ]
 
 
-def _color_from_key(key: str) -> tuple[int, int, int]:
-    digest = hashlib.sha256(key.encode()).hexdigest()
-    return (
-        64 + int(digest[0:2], 16) % 176,
-        64 + int(digest[2:4], 16) % 176,
-        64 + int(digest[4:6], 16) % 176,
+def download_image(url: str, filename: str, *, timeout: int = 30) -> ContentFile:
+    """Download a remote image and normalize it to JPEG for mobile clients."""
+    req = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": "Mozilla/5.0 (compatible; AajheeSeed/1.0)",
+            "Accept": "image/jpeg,image/png,image/webp,image/*;q=0.8",
+        },
     )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as response:
+            data = response.read()
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"Failed to download image {url}: {exc}") from exc
+
+    if not data:
+        raise RuntimeError(f"Empty image response for {url}")
+
+    try:
+        from PIL import Image
+
+        image = Image.open(BytesIO(data))
+        if image.mode not in ("RGB", "L"):
+            image = image.convert("RGB")
+        elif image.mode == "L":
+            image = image.convert("RGB")
+        buffer = BytesIO()
+        image.save(buffer, format="JPEG", quality=85, optimize=True)
+        data = buffer.getvalue()
+    except Exception as exc:
+        raise RuntimeError(f"Failed to convert image {url}: {exc}") from exc
+
+    stem = filename.rsplit(".", 1)[0]
+    return ContentFile(data, name=f"{stem}.jpg")
 
 
-def _load_font(size: int):
-    for path in (
-        "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
-    ):
-        try:
-            return ImageFont.truetype(path, size=size)
-        except OSError:
-            continue
-    return ImageFont.load_default()
-
-
-def generate_seed_image(title: str, subtitle: str, filename: str) -> ContentFile:
-    width, height = 800, 800
-    background = _color_from_key(title)
-    accent = _color_from_key(subtitle or title + "-accent")
-
-    image = Image.new("RGB", (width, height), background)
-    draw = ImageDraw.Draw(image)
-    draw.rectangle(
-        (40, 40, width - 40, height - 40),
-        fill=accent,
-        outline=(255, 255, 255),
-        width=4,
-    )
-    draw.ellipse(
-        (120, 120, width - 120, height - 120),
-        fill=background,
-        outline=(255, 255, 255),
-        width=3,
-    )
-
-    title_font = _load_font(48)
-    subtitle_font = _load_font(28)
-    draw.multiline_text((80, 300), title, fill=(255, 255, 255), font=title_font, spacing=8)
-    if subtitle:
-        draw.text((80, 520), subtitle, fill=(240, 240, 240), font=subtitle_font)
-
-    buffer = BytesIO()
-    image.save(buffer, format="PNG")
-    return ContentFile(buffer.getvalue(), name=filename)
+def download_image_or_none(url: str, filename: str) -> ContentFile | None:
+    if not url:
+        return None
+    try:
+        return download_image(url, filename)
+    except RuntimeError:
+        return None

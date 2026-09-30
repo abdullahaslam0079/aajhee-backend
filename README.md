@@ -176,14 +176,17 @@ Hook that command to a Render Cron job or GitHub Action when you want nightly re
 
 `python manage.py migrate --noinput && python manage.py ensure_superuser && gunicorn config.wsgi:application --bind 0.0.0.0:$PORT`
 
-**Local demo data** (admin, merchants, products, orders, reviews):
+**Local demo data** (admin, merchants, products with real photos, orders, reviews):
 
 ```bash
 python manage.py seed_test_data
+# Upgrade placeholder graphics / rename catalog:
+python manage.py seed_test_data --refresh
 ```
 
 Password for all seeded accounts: `Bscs@0079`. Admin: `abdullah@gmail.com`.  
-Merchants: `merchant.*@aajhee.test`. Consumers: `consumer@aajhee.test`, `fatima@aajhee.test`, `hassan@aajhee.test`.
+Merchants: `merchant.*@aajhee.test`. Consumers: `consumer@aajhee.test`, `fatima@aajhee.test`, `hassan@aajhee.test`.  
+Shops are Lahore-based (Gulberg, DHA, Johar Town, etc.).
 
 On Render, seeding is skipped unless `SEED_TEST_DATA=true` (or `--force`). Prefer Start Command:
 
