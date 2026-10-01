@@ -5,7 +5,7 @@ from __future__ import annotations
 from django.db.models import Q
 from rest_framework import serializers
 
-from .models import Category
+from .models import Business, Category, Product
 
 # Primary + up to 3 secondary business verticals.
 MAX_BUSINESS_CATEGORIES = 4
@@ -33,6 +33,42 @@ def product_category_q(category_id: int | str) -> Q:
     """Match products in category_id or any descendant."""
     ids = Category.descendant_ids(int(category_id), include_self=True)
     return Q(category_id__in=ids)
+
+
+def sellable_product_category_ids() -> set[int]:
+    """Category IDs that currently have at least one customer-visible product."""
+    return set(
+        Product.objects.filter(
+            is_enabled=True,
+            is_available=True,
+            business__deleted_at__isnull=True,
+            business__is_paused=False,
+            business__verification_status=Business.VerificationStatus.VERIFIED,
+        )
+        .exclude(category_id__isnull=True)
+        .values_list("category_id", flat=True)
+        .distinct()
+    )
+
+
+def category_ids_with_products_for_customers() -> set[int]:
+    """
+    Category IDs customers should see: nodes with sellable products, plus ancestors.
+
+    Roots appear when any descendant has products; empty L2 nodes are omitted.
+    """
+    populated = sellable_product_category_ids()
+    if not populated:
+        return set()
+
+    visible = set(populated)
+    parent_by_id = dict(Category.objects.values_list("id", "parent_id"))
+    for category_id in list(populated):
+        current = parent_by_id.get(category_id)
+        while current and current not in visible:
+            visible.add(current)
+            current = parent_by_id.get(current)
+    return visible
 
 
 def ensure_root_category(category: Category, *, field: str = "category_id") -> Category:

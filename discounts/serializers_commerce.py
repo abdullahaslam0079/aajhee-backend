@@ -67,9 +67,12 @@ class CategoryTreeSerializer(serializers.ModelSerializer):
 
     def get_children(self, obj: Category):
         include_inactive = self.context.get("include_inactive", False)
+        visible_ids = self.context.get("visible_ids")
         qs = obj.children.all()
         if not include_inactive:
             qs = qs.filter(is_active=True)
+        if visible_ids is not None:
+            qs = qs.filter(id__in=visible_ids)
         qs = qs.order_by("sort_order", "name", "id")
         return CategoryTreeSerializer(qs, many=True, context=self.context).data
 

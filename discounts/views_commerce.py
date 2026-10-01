@@ -13,7 +13,11 @@ from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 
 from .delivery_options import get_or_create_fulfillment_settings
-from .category_utils import product_category_q, sync_business_categories
+from .category_utils import (
+    category_ids_with_products_for_customers,
+    product_category_q,
+    sync_business_categories,
+)
 from .geo_utils import get_or_create_city, get_or_create_default_country
 from .location_utils import resolve_user_location
 from .models import (
@@ -115,13 +119,29 @@ class CitiesListAPIView(APIView):
 
 
 class CategoriesTreeAPIView(APIView):
+    """
+    Nested category tree.
+
+    Query params:
+      - populated=1: only categories/subcategories that have sellable products
+        (plus ancestors). Used by customer apps so empty shelves stay hidden.
+      - without populated: full active tree (merchant pickers / admin tools).
+    """
+
     permission_classes = [AllowAny]
 
     def get(self, request):
         roots = Category.objects.filter(parent__isnull=True, is_active=True).order_by(
             "sort_order", "name", "id"
         )
-        return Response(CategoryTreeSerializer(roots, many=True).data)
+        context = {"request": request}
+        if request.query_params.get("populated") in ("1", "true", "True"):
+            visible = category_ids_with_products_for_customers()
+            if not visible:
+                return Response([])
+            roots = roots.filter(id__in=visible)
+            context["visible_ids"] = visible
+        return Response(CategoryTreeSerializer(roots, many=True, context=context).data)
 
 
 class ProductsFeedMixin(UserLocationContextMixin):

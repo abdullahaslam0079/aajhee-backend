@@ -8,7 +8,10 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from .address_utils import get_user_address, promote_next_default_address
-from .category_utils import business_vertical_q
+from .category_utils import (
+    business_vertical_q,
+    category_ids_with_products_for_customers,
+)
 from .location_utils import (
     filter_branches_for_location,
     filter_branches_within_radius,
@@ -117,6 +120,10 @@ class CategoriesListAPIView(generics.ListAPIView):
         # Opt-in escape hatch for clients that need every active node flat.
         if self.request.query_params.get("all") in ("1", "true", "True"):
             qs = Category.objects.filter(is_active=True)
+        # Customer browse: hide roots with zero sellable products in the subtree.
+        elif self.request.query_params.get("populated") in ("1", "true", "True"):
+            visible = category_ids_with_products_for_customers()
+            qs = qs.filter(id__in=visible) if visible else qs.none()
         return qs.order_by("sort_order", "name", "id")
 
 
