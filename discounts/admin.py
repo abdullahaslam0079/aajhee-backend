@@ -291,8 +291,18 @@ class OfferRedemptionAdmin(admin.ModelAdmin):
 
 @admin.register(UserPreferences)
 class UserPreferencesAdmin(admin.ModelAdmin):
-    list_display = ("id", "user", "notifications_enabled", "theme_preference")
-    list_filter = ("theme_preference", "notifications_enabled")
+    list_display = (
+        "id",
+        "user",
+        "notifications_enabled",
+        "marketing_notifications_enabled",
+        "theme_preference",
+    )
+    list_filter = (
+        "theme_preference",
+        "notifications_enabled",
+        "marketing_notifications_enabled",
+    )
 
 
 @admin.register(DeviceToken)

@@ -839,6 +839,9 @@ class UserPreferences(models.Model):
         User, on_delete=models.CASCADE, related_name="preferences"
     )
     notifications_enabled = models.BooleanField(default=True)
+    # Marketing / promo pushes (e.g. favorited store new offers). Transactional
+    # pushes still follow notifications_enabled.
+    marketing_notifications_enabled = models.BooleanField(default=True)
     theme_preference = models.CharField(
         max_length=16,
         choices=ThemePreference.choices,

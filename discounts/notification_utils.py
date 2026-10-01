@@ -13,12 +13,46 @@ from .whatsapp import send_twilio_whatsapp
 
 logger = logging.getLogger(__name__)
 
+# Types that respect marketing_notifications_enabled (not transactional).
+MARKETING_NOTIFICATION_TYPES = frozenset(
+    {
+        Notification.NotificationType.FAVORITED_BUSINESS_NEW_OFFER,
+    }
+)
+
 
 def _notifications_enabled_for(user_id: int) -> bool:
     prefs = UserPreferences.objects.filter(user_id=user_id).only("notifications_enabled").first()
     if prefs is None:
         return True
     return prefs.notifications_enabled
+
+
+def _marketing_notifications_enabled_for(user_id: int) -> bool:
+    prefs = (
+        UserPreferences.objects.filter(user_id=user_id)
+        .only("marketing_notifications_enabled")
+        .first()
+    )
+    if prefs is None:
+        return True
+    return prefs.marketing_notifications_enabled
+
+
+def _should_send_push(*, user_id: int, notification_type: str) -> bool:
+    """Return False when user prefs say this push should be skipped.
+
+    Inbox rows are still created by the caller. When transactional push is off,
+    all FCM is skipped. Marketing types also require marketing_notifications_enabled.
+    """
+    if not _notifications_enabled_for(user_id):
+        return False
+    if (
+        notification_type in MARKETING_NOTIFICATION_TYPES
+        and not _marketing_notifications_enabled_for(user_id)
+    ):
+        return False
+    return True
 
 
 def _send_fcm_after_commit(
@@ -99,11 +133,12 @@ def create_and_push_notification(
         data=payload,
     )
 
-    if not _notifications_enabled_for(user_id):
+    if not _should_send_push(user_id=user_id, notification_type=type):
         logger.info(
-            "FCM skipped: notifications_enabled=False for user_id=%s "
+            "FCM skipped: prefs disabled for user_id=%s type=%s "
             "(inbox row %s still created)",
             user_id,
+            type,
             notification.id,
         )
         return notification

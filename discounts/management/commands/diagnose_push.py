@@ -101,6 +101,10 @@ class Command(BaseCommand):
                 f"notifications_enabled: "
                 f"{True if prefs is None else prefs.notifications_enabled}"
             )
+            self.stdout.write(
+                f"marketing_notifications_enabled: "
+                f"{True if prefs is None else prefs.marketing_notifications_enabled}"
+            )
             self.stdout.write(f"device_tokens: {len(devices)}")
             for device in devices:
                 self.stdout.write(

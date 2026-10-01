@@ -928,6 +928,7 @@ class UserPreferencesSerializer(serializers.ModelSerializer):
         model = UserPreferences
         fields = [
             "notifications_enabled",
+            "marketing_notifications_enabled",
             "theme_preference",
             "preferred_categories",
             "preferred_category_details",

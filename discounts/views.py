@@ -896,7 +896,7 @@ def _paginate_notifications(queryset, request):
 
 
 class DeviceTokenRegisterAPIView(APIView):
-    permission_classes = [permissions.IsAuthenticated, IsConsumerAccount]
+    permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request):
         serializer = DeviceTokenSerializer(
@@ -915,7 +915,7 @@ class DeviceTokenRegisterAPIView(APIView):
 
 
 class DeviceTokenUnregisterAPIView(APIView):
-    permission_classes = [permissions.IsAuthenticated, IsConsumerAccount]
+    permission_classes = [permissions.IsAuthenticated]
 
     def delete(self, request, token):
         deleted, _ = DeviceToken.objects.filter(

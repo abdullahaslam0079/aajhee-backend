@@ -431,6 +431,7 @@ collection = {
                     "api/user/preferences",
                     body={
                         "notifications_enabled": True,
+                        "marketing_notifications_enabled": True,
                         "preferred_categories": [1, 2],
                     },
                     auth_bearer="{{consumer_token}}",
