@@ -18,6 +18,7 @@ from .models import (
     Offer,
     OfferRedemption,
     PasswordResetToken,
+    Product,
     UserPreferences,
 )
 from .offer_pricing import compute_offer_payment
@@ -27,6 +28,8 @@ from .offer_utils import (
     build_offer_image_urls,
     branch_highlight_queryset,
     build_user_redemption_map,
+    get_branch_products_count,
+    get_branch_top_products,
     get_highest_discount_active_offer,
     get_highest_discount_active_product,
     get_user_offer_usage_status,
@@ -531,6 +534,36 @@ class BranchHighlightSerializer(serializers.ModelSerializer):
         }
 
 
+class BranchTopProductSerializer(serializers.ModelSerializer):
+    """Slim product card for nearby-shop previews (max 8 per branch)."""
+
+    image_url = serializers.SerializerMethodField()
+    has_discount = serializers.BooleanField(read_only=True)
+    effective_price = serializers.DecimalField(
+        max_digits=10, decimal_places=2, read_only=True
+    )
+    effective_discount_percent = serializers.DecimalField(
+        max_digits=5, decimal_places=2, read_only=True
+    )
+
+    class Meta:
+        model = Product
+        fields = [
+            "id",
+            "name",
+            "image_url",
+            "base_price",
+            "sale_price",
+            "discount_percent",
+            "effective_price",
+            "effective_discount_percent",
+            "has_discount",
+        ]
+
+    def get_image_url(self, obj: Product) -> str | None:
+        return build_media_url(self.context.get("request"), obj.image)
+
+
 class MapBranchSerializer(BranchHighlightSerializer):
     business_id = serializers.IntegerField(source="business.id", read_only=True)
     business_name = serializers.CharField(source="business.name", read_only=True)
@@ -539,6 +572,8 @@ class MapBranchSerializer(BranchHighlightSerializer):
     category = CategorySerializer(source="business.category", read_only=True)
     formattedAddress = serializers.CharField(source="formatted_address", read_only=True)
     distance_km = serializers.SerializerMethodField()
+    products_count = serializers.SerializerMethodField()
+    top_products = serializers.SerializerMethodField()
 
     class Meta(BranchHighlightSerializer.Meta):
         fields = BranchHighlightSerializer.Meta.fields + [
@@ -553,6 +588,8 @@ class MapBranchSerializer(BranchHighlightSerializer):
             "longitude",
             "formattedAddress",
             "distance_km",
+            "products_count",
+            "top_products",
         ]
 
     def get_distance_km(self, obj: Branch):
@@ -561,6 +598,15 @@ class MapBranchSerializer(BranchHighlightSerializer):
             return None
         distance = branch_distance_km(obj, location)
         return round(distance, 2)
+
+    def get_products_count(self, obj: Branch) -> int:
+        return get_branch_products_count(obj)
+
+    def get_top_products(self, obj: Branch):
+        products = get_branch_top_products(obj)
+        return BranchTopProductSerializer(
+            products, many=True, context=self.context
+        ).data
 
 
 class MapBusinessSerializer(serializers.ModelSerializer):

@@ -5,10 +5,20 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
 
-from django.db.models import Case, DecimalField, F, Max, Prefetch, Q, When
+from django.db.models import Case, Count, DecimalField, F, Max, Prefetch, Q, When
 from django.utils import timezone
 
-from .models import Offer, OfferBranchStats, OfferRedemption, OfferScan, Product
+from .models import (
+    Branch,
+    Offer,
+    OfferBranchStats,
+    OfferRedemption,
+    OfferScan,
+    Product,
+)
+
+# Shop-card product strip on map/store lists.
+TOP_PRODUCTS_LIMIT = 8
 
 
 def active_offer_q(now=None, prefix=""):
@@ -313,13 +323,81 @@ def get_highest_discount_active_offer(branch, now=None):
     return max(active_offers, key=lambda offer: offer.discount_percent)
 
 
+def active_catalog_products_queryset():
+    """Enabled + available products with engagement + branch ids for scoping."""
+    return (
+        Product.objects.filter(is_enabled=True, is_available=True)
+        .select_related("engagement_stats")
+        .prefetch_related(
+            Prefetch("branches", queryset=Branch.objects.only("id")),
+        )
+        .annotate(_branch_count=Count("branches", distinct=True))
+    )
+
+
+def product_applies_to_branch(product: Product, branch: Branch) -> bool:
+    """Match StoreCatalogAPIView: empty M2M ⇒ all branches of the business."""
+    branch_count = getattr(product, "_branch_count", None)
+    if branch_count is not None:
+        if branch_count == 0:
+            return True
+    cached = list(product.branches.all())
+    if not cached:
+        return True
+    return any(b.id == branch.id for b in cached)
+
+
+def branch_catalog_products(branch: Branch) -> list[Product]:
+    """Active catalog products visible for this branch (prefers prefetch)."""
+    business = getattr(branch, "business", None)
+    products = None
+    if business is not None:
+        products = getattr(business, "prefetched_active_products", None)
+    if products is None:
+        products = list(
+            active_catalog_products_queryset().filter(business_id=branch.business_id)
+        )
+    return [p for p in products if product_applies_to_branch(p, branch)]
+
+
+def _top_product_sort_key(product: Product):
+    percent = product.discount_percent
+    if percent is None:
+        percent = product.effective_discount_percent
+    stats = getattr(product, "engagement_stats", None)
+    likes = stats.like_count if stats else 0
+    views = stats.view_count if stats else 0
+    return (
+        -float(percent or 0),
+        -likes,
+        -views,
+        product.sort_order,
+        -product.id,
+    )
+
+
+def get_branch_products_count(branch: Branch) -> int:
+    return len(branch_catalog_products(branch))
+
+
+def get_branch_top_products(
+    branch: Branch, limit: int = TOP_PRODUCTS_LIMIT
+) -> list[Product]:
+    products = branch_catalog_products(branch)
+    products.sort(key=_top_product_sort_key)
+    return products[:limit]
+
+
 def get_highest_discount_active_product(branch):
     """Best enabled product discount for map/store highlights."""
-    products = [
-        product
-        for product in branch.products.all()
-        if product.is_enabled and product.is_available
-    ]
+    products = branch_catalog_products(branch)
+    if not products:
+        # Fallback: M2M-only prefetch used by older callers.
+        products = [
+            product
+            for product in branch.products.all()
+            if product.is_enabled and product.is_available
+        ]
     if not products:
         return None
 
@@ -415,6 +493,11 @@ def prefetch_branch_offers(queryset, now=None):
             queryset=Product.objects.filter(
                 is_enabled=True, is_available=True
             ).prefetch_related("gallery_images"),
+        ),
+        Prefetch(
+            "business__products",
+            queryset=active_catalog_products_queryset(),
+            to_attr="prefetched_active_products",
         ),
     )
 
