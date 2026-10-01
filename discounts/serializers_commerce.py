@@ -48,6 +48,8 @@ class CitySerializer(serializers.ModelSerializer):
 
 class CategoryTreeSerializer(serializers.ModelSerializer):
     children = serializers.SerializerMethodField()
+    business_count = serializers.SerializerMethodField()
+    product_count = serializers.SerializerMethodField()
 
     class Meta:
         model = Category
@@ -58,12 +60,28 @@ class CategoryTreeSerializer(serializers.ModelSerializer):
             "parent_id",
             "sort_order",
             "is_active",
+            "business_count",
+            "product_count",
             "children",
         ]
 
     def get_children(self, obj: Category):
-        qs = obj.children.filter(is_active=True).order_by("sort_order", "name", "id")
+        include_inactive = self.context.get("include_inactive", False)
+        qs = obj.children.all()
+        if not include_inactive:
+            qs = qs.filter(is_active=True)
+        qs = qs.order_by("sort_order", "name", "id")
         return CategoryTreeSerializer(qs, many=True, context=self.context).data
+
+    def get_business_count(self, obj: Category) -> int:
+        if not self.context.get("with_counts"):
+            return 0
+        return obj.businesses.count() + obj.primary_businesses.count()
+
+    def get_product_count(self, obj: Category) -> int:
+        if not self.context.get("with_counts"):
+            return 0
+        return obj.products.count()
 
 
 class CategoryWriteSerializer(serializers.ModelSerializer):
@@ -176,7 +194,7 @@ class ProductGallerySerializer(serializers.ModelSerializer):
 
 class ProductSerializer(serializers.ModelSerializer):
     category_id = serializers.PrimaryKeyRelatedField(
-        queryset=Category.objects.all(), source="category"
+        queryset=Category.objects.filter(is_active=True), source="category"
     )
     category_name = serializers.CharField(source="category.name", read_only=True)
     branch_ids = serializers.PrimaryKeyRelatedField(
@@ -290,6 +308,11 @@ class ProductSerializer(serializers.ModelSerializer):
         percent = attrs.get(
             "discount_percent", getattr(self.instance, "discount_percent", None)
         )
+        category = attrs.get("category", getattr(self.instance, "category", None))
+        if category is not None and not category.is_active:
+            raise serializers.ValidationError(
+                {"category_id": "Selected category is inactive."}
+            )
         if sale is not None and base is not None and sale > base:
             raise serializers.ValidationError(
                 {"sale_price": "Sale price cannot exceed base price."}
@@ -925,7 +948,7 @@ def serialize_delivery_options(branch: Branch, location) -> list[dict]:
 class BusinessPresenceSerializer(serializers.ModelSerializer):
     category_ids = serializers.PrimaryKeyRelatedField(
         many=True,
-        queryset=Category.objects.all(),
+        queryset=Category.objects.filter(parent__isnull=True, is_active=True),
         source="categories",
         required=False,
     )
@@ -951,3 +974,8 @@ class BusinessPresenceSerializer(serializers.ModelSerializer):
             "primary_country_id",
             "category_ids",
         ]
+
+    def validate_category_ids(self, value):
+        from .category_utils import validate_business_root_categories
+
+        return validate_business_root_categories(list(value))

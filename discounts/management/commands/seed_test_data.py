@@ -50,6 +50,8 @@ from discounts.seed_utils import (
     LIVE_BUSINESSES,
     ROOT_CATEGORIES,
     download_image_or_none,
+    ensure_l2_categories,
+    resolve_product_l2_slug,
 )
 
 
@@ -134,6 +136,7 @@ class Command(BaseCommand):
                 cat.is_active = True
                 cat.save(update_fields=["name", "slug", "sort_order", "is_active"])
             by_slug[slug] = cat
+        by_slug.update(ensure_l2_categories(Category))
         return by_slug
 
     def _seed_admin(self):
@@ -315,11 +318,17 @@ class Command(BaseCommand):
                 discount = (
                     Product.compute_discount_percent(base, sale) if sale else None
                 )
+                product_category = category
+                l2_slug = product_data.get("category_slug") or resolve_product_l2_slug(
+                    product_data["name"], payload["category_slug"]
+                )
+                if l2_slug and l2_slug in categories:
+                    product_category = categories[l2_slug]
                 product, created = Product.objects.update_or_create(
                     business=business,
                     name=product_data["name"],
                     defaults={
-                        "category": category,
+                        "category": product_category,
                         "description": product_data["description"],
                         "detailed_description": product_data["description"],
                         "base_price": base,

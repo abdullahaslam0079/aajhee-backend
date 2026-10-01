@@ -145,6 +145,27 @@ class Category(models.Model):
             return f"{self.parent} → {self.name}"
         return self.name
 
+    @property
+    def is_root(self) -> bool:
+        return self.parent_id is None
+
+    @classmethod
+    def descendant_ids(
+        cls, category_id: int, *, include_self: bool = True
+    ) -> list[int]:
+        """Return category_id plus all nested children (any depth)."""
+        collected: list[int] = [int(category_id)] if include_self else []
+        frontier = [int(category_id)]
+        while frontier:
+            children = list(
+                cls.objects.filter(parent_id__in=frontier).values_list("id", flat=True)
+            )
+            if not children:
+                break
+            collected.extend(children)
+            frontier = children
+        return collected
+
 
 class Business(models.Model):
     class PresenceMode(models.TextChoices):

@@ -13,6 +13,7 @@ from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 
 from .delivery_options import get_or_create_fulfillment_settings
+from .category_utils import product_category_q, sync_business_categories
 from .geo_utils import get_or_create_city, get_or_create_default_country
 from .location_utils import resolve_user_location
 from .models import (
@@ -161,9 +162,7 @@ class ProductListAPIView(ProductsFeedMixin, generics.ListAPIView):
         discounted = self.request.query_params.get("discounted")
         q = self.request.query_params.get("q")
         if category_id:
-            qs = qs.filter(
-                Q(category_id=category_id) | Q(category__parent_id=category_id)
-            )
+            qs = qs.filter(product_category_q(category_id))
         if business_id:
             qs = qs.filter(business_id=business_id)
         if discounted in ("1", "true", "True"):
@@ -858,10 +857,7 @@ class BusinessPresenceAPIView(APIView):
             setattr(business, key, value)
         business.save()
         if categories is not None:
-            business.categories.set(categories)
-            if categories and not business.category_id:
-                business.category = categories[0]
-                business.save(update_fields=["category"])
+            sync_business_categories(business, categories=list(categories))
         return Response(BusinessPresenceSerializer(business).data)
 
 
@@ -1232,7 +1228,13 @@ class AdminCategoryTreeListCreateAPIView(APIView):
         roots = Category.objects.filter(parent__isnull=True).order_by(
             "sort_order", "name", "id"
         )
-        return Response(CategoryTreeSerializer(roots, many=True).data)
+        return Response(
+            CategoryTreeSerializer(
+                roots,
+                many=True,
+                context={"request": request, "include_inactive": True, "with_counts": True},
+            ).data
+        )
 
     def post(self, request):
         blocked = _admin_support_write_blocked(request)

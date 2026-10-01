@@ -88,12 +88,24 @@ class AdminLoginTokenObtainPairSerializer(TokenObtainPairSerializer):
 
 class AdminCategorySerializer(serializers.ModelSerializer):
     business_count = serializers.SerializerMethodField()
-    parent_id = serializers.IntegerField(source="parent.id", read_only=True, allow_null=True)
+    product_count = serializers.SerializerMethodField()
+    parent_id = serializers.IntegerField(
+        source="parent.id", read_only=True, allow_null=True
+    )
 
     class Meta:
         model = Category
-        fields = ["id", "name", "slug", "parent_id", "sort_order", "is_active", "business_count"]
-        read_only_fields = ["id", "business_count", "parent_id"]
+        fields = [
+            "id",
+            "name",
+            "slug",
+            "parent_id",
+            "sort_order",
+            "is_active",
+            "business_count",
+            "product_count",
+        ]
+        read_only_fields = ["id", "business_count", "product_count", "parent_id"]
 
     def get_business_count(self, obj: Category) -> int:
         return getattr(
@@ -101,6 +113,9 @@ class AdminCategorySerializer(serializers.ModelSerializer):
             "business_count",
             obj.businesses.count() + obj.primary_businesses.count(),
         )
+
+    def get_product_count(self, obj: Category) -> int:
+        return getattr(obj, "product_count", obj.products.count())
 
     def validate_name(self, value: str) -> str:
         name = value.strip()

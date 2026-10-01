@@ -17,6 +17,7 @@ from rest_framework_simplejwt.views import TokenObtainPairView
 
 from .audit_utils import write_audit
 from .auth_utils import blacklist_user_tokens, logout_response_message
+from .category_utils import business_vertical_q
 from .delivery_options import get_or_create_fulfillment_settings
 from .models import (
     Branch,
@@ -526,7 +527,7 @@ class AdminBusinessListCreateAPIView(APIView):
             )
         category_id = request.query_params.get("category_id")
         if category_id:
-            qs = qs.filter(category_id=category_id)
+            qs = qs.filter(business_vertical_q(category_id, business_prefix="")).distinct()
         verification_status = (request.query_params.get("verification_status") or "").strip()
         if verification_status:
             qs = qs.filter(verification_status=verification_status)

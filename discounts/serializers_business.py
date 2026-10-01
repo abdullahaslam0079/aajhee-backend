@@ -56,7 +56,7 @@ class BusinessRegisterSerializer(serializers.Serializer):
         },
     )
     category_id = serializers.PrimaryKeyRelatedField(
-        queryset=Category.objects.all(),
+        queryset=Category.objects.filter(parent__isnull=True, is_active=True),
         source="category",
         required=True,
         error_messages={
@@ -183,17 +183,25 @@ class BusinessRegisterSerializer(serializers.Serializer):
             presence_mode=presence_mode,
             online_coverage=online_coverage,
         )
-        business.categories.add(category)
+        from .category_utils import sync_business_categories
+
+        sync_business_categories(business, primary=category, categories=[category])
         return business
 
 
 class BusinessProfileSerializer(serializers.ModelSerializer):
     email = serializers.EmailField(source="owner.email", read_only=True)
     category_id = serializers.PrimaryKeyRelatedField(
-        queryset=Category.objects.all(),
+        queryset=Category.objects.filter(parent__isnull=True, is_active=True),
         source="category",
         required=False,
         error_messages={"does_not_exist": "Selected category does not exist."},
+    )
+    category_ids = serializers.PrimaryKeyRelatedField(
+        many=True,
+        queryset=Category.objects.filter(parent__isnull=True, is_active=True),
+        required=False,
+        write_only=True,
     )
     category_name = serializers.CharField(
         source="category.name", read_only=True, allow_null=True
@@ -225,6 +233,7 @@ class BusinessProfileSerializer(serializers.ModelSerializer):
             "logo",
             "logo_url",
             "category_id",
+            "category_ids",
             "category_name",
             "category",
             "presence_mode",
@@ -321,6 +330,27 @@ class BusinessProfileSerializer(serializers.ModelSerializer):
         data["is_paused"] = instance.is_paused
         data["is_customer_visible"] = instance.is_customer_visible()
         return data
+
+    def validate_category_ids(self, value):
+        from .category_utils import validate_business_root_categories
+
+        return validate_business_root_categories(list(value))
+
+    def update(self, instance, validated_data):
+        from .category_utils import sync_business_categories
+
+        category_ids = validated_data.pop("category_ids", None)
+        primary = validated_data.pop("category", serializers.empty)
+        instance = super().update(instance, validated_data)
+        if category_ids is not None:
+            sync_business_categories(
+                instance,
+                primary=None if primary is serializers.empty else primary,
+                categories=list(category_ids),
+            )
+        elif primary is not serializers.empty:
+            sync_business_categories(instance, primary=primary)
+        return instance
 
 
 class BusinessLoginTokenObtainPairSerializer(TokenObtainPairSerializer):

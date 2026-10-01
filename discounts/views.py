@@ -8,6 +8,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from .address_utils import get_user_address, promote_next_default_address
+from .category_utils import business_vertical_q
 from .location_utils import (
     filter_branches_for_location,
     filter_branches_within_radius,
@@ -106,9 +107,17 @@ class UserOfferUsageContextMixin:
 
 
 class CategoriesListAPIView(generics.ListAPIView):
-    queryset = Category.objects.all().order_by("name")
+    """Flat root categories for simple chips. Use /api/categories/tree for nested browse."""
+
     serializer_class = CategorySerializer
     permission_classes = [permissions.AllowAny]
+
+    def get_queryset(self):
+        qs = Category.objects.filter(parent__isnull=True, is_active=True)
+        # Opt-in escape hatch for clients that need every active node flat.
+        if self.request.query_params.get("all") in ("1", "true", "True"):
+            qs = Category.objects.filter(is_active=True)
+        return qs.order_by("sort_order", "name", "id")
 
 
 class OffersListAPIView(
@@ -125,7 +134,7 @@ class OffersListAPIView(
 
         category_id = self.request.query_params.get("category_id")
         if category_id:
-            queryset = queryset.filter(business__category_id=category_id)
+            queryset = queryset.filter(business_vertical_q(category_id)).distinct()
 
         branch_id = self.request.query_params.get("branch_id")
         if branch_id:
@@ -225,7 +234,7 @@ class MapBranchesAPIView(UserLocationContextMixin, generics.ListAPIView):
 
         category_id = self.request.query_params.get("category_id")
         if category_id:
-            queryset = queryset.filter(business__category_id=category_id)
+            queryset = queryset.filter(business_vertical_q(category_id)).distinct()
 
         branch_id = self.request.query_params.get("branch_id")
         if branch_id:
@@ -286,7 +295,7 @@ class MapNearbyBranchesAPIView(UserLocationContextMixin, generics.ListAPIView):
 
         category_id = self.request.query_params.get("category_id")
         if category_id:
-            queryset = queryset.filter(business__category_id=category_id)
+            queryset = queryset.filter(business_vertical_q(category_id)).distinct()
 
         location = self.get_user_location()
         if location is None:
@@ -615,7 +624,7 @@ class DiscountsFeedAPIView(UserLocationContextMixin, UserOfferUsageContextMixin,
 
         category_id = request.query_params.get("category_id")
         if category_id:
-            queryset = queryset.filter(business__category_id=category_id)
+            queryset = queryset.filter(business_vertical_q(category_id)).distinct()
 
         location = resolve_user_location(request)
         if location is not None:

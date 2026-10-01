@@ -23,6 +23,142 @@ ROOT_CATEGORIES = [
     ("Other", "other", 80),
 ]
 
+# L2 under each root: (parent_slug, name, slug, sort_order)
+L2_CATEGORIES = [
+    ("grocery-food", "Fresh Produce", "fresh-produce", 10),
+    ("grocery-food", "Dairy & Eggs", "dairy-eggs", 20),
+    ("grocery-food", "Bakery", "bakery", 30),
+    ("grocery-food", "Beverages", "beverages", 40),
+    ("grocery-food", "Snacks", "snacks", 50),
+    ("grocery-food", "Meat & Seafood", "meat-seafood", 60),
+    ("electronics", "Mobiles", "mobiles", 10),
+    ("electronics", "Laptops", "laptops", 20),
+    ("electronics", "Audio", "audio", 30),
+    ("electronics", "Accessories", "electronics-accessories", 40),
+    ("electronics", "Home Appliances", "home-appliances", 50),
+    ("fashion", "Men", "fashion-men", 10),
+    ("fashion", "Women", "fashion-women", 20),
+    ("fashion", "Kids", "fashion-kids", 30),
+    ("fashion", "Footwear", "footwear", 40),
+    ("fashion", "Bags & Accessories", "bags-accessories", 50),
+    ("home-living", "Furniture", "furniture", 10),
+    ("home-living", "Kitchen", "kitchen", 20),
+    ("home-living", "Decor", "decor", 30),
+    ("home-living", "Bedding", "bedding", 40),
+    ("beauty", "Makeup", "makeup", 10),
+    ("beauty", "Skincare", "skincare", 20),
+    ("beauty", "Haircare", "haircare", 30),
+    ("beauty", "Fragrance", "fragrance", 40),
+    ("gifts", "Flowers", "flowers", 10),
+    ("gifts", "Personalized", "personalized", 20),
+    ("gifts", "Occasions", "occasions", 30),
+    ("health", "Pharmacy", "pharmacy", 10),
+    ("health", "Wellness", "wellness", 20),
+    ("health", "Personal Care", "personal-care", 30),
+    ("other", "Misc", "misc", 10),
+]
+
+# Product name substring → L2 slug for remapping demo / existing catalogs.
+PRODUCT_L2_REMAP_HINTS = [
+    ("fruit", "fresh-produce"),
+    ("produce", "fresh-produce"),
+    ("milk", "dairy-eggs"),
+    ("egg", "dairy-eggs"),
+    ("dairy", "dairy-eggs"),
+    ("basmati", "snacks"),
+    ("rice", "snacks"),
+    ("chicken", "meat-seafood"),
+    ("meat", "meat-seafood"),
+    ("seafood", "meat-seafood"),
+    ("earbud", "audio"),
+    ("audio", "audio"),
+    ("charger", "electronics-accessories"),
+    ("phone stand", "electronics-accessories"),
+    ("smartwatch", "electronics-accessories"),
+    ("watch", "electronics-accessories"),
+    ("kurta", "fashion-men"),
+    ("denim", "fashion-men"),
+    ("jacket", "fashion-men"),
+    ("belt", "bags-accessories"),
+    ("leather belt", "bags-accessories"),
+    ("cushion", "decor"),
+    ("dinner set", "kitchen"),
+    ("ceramic", "kitchen"),
+    ("lamp", "decor"),
+    ("skincare", "skincare"),
+    ("moisturizer", "skincare"),
+    ("lipstick", "makeup"),
+    ("makeup", "makeup"),
+    ("hair serum", "haircare"),
+    ("hair", "haircare"),
+    ("mug", "personalized"),
+    ("hamper", "occasions"),
+    ("gift", "occasions"),
+    ("photo frame", "personalized"),
+    ("vitamin", "wellness"),
+    ("thermometer", "pharmacy"),
+    ("first aid", "personal-care"),
+]
+
+
+def ensure_l2_categories(Category) -> dict[str, object]:
+    """
+    Idempotently create L2 nodes under canonical roots.
+
+    Returns slug → Category for all L2 categories (and does not create roots).
+    """
+    roots = {
+        c.slug: c
+        for c in Category.objects.filter(parent__isnull=True, slug__in={
+            row[0] for row in L2_CATEGORIES
+        })
+    }
+    by_slug: dict[str, object] = {}
+    for parent_slug, name, slug, sort_order in L2_CATEGORIES:
+        parent = roots.get(parent_slug)
+        if parent is None:
+            continue
+        cat = Category.objects.filter(parent=parent, slug=slug).first()
+        if cat is None:
+            cat = Category.objects.filter(parent=parent, name__iexact=name).first()
+        if cat is None:
+            cat = Category.objects.create(
+                name=name,
+                slug=slug,
+                parent=parent,
+                sort_order=sort_order,
+                is_active=True,
+            )
+        else:
+            updated = False
+            if cat.name != name:
+                cat.name = name
+                updated = True
+            if cat.slug != slug:
+                cat.slug = slug
+                updated = True
+            if cat.sort_order != sort_order:
+                cat.sort_order = sort_order
+                updated = True
+            if not cat.is_active:
+                cat.is_active = True
+                updated = True
+            if updated:
+                cat.save(
+                    update_fields=["name", "slug", "sort_order", "is_active"]
+                )
+        by_slug[slug] = cat
+    return by_slug
+
+
+def resolve_product_l2_slug(product_name: str, fallback_root_slug: str | None = None) -> str | None:
+    lowered = (product_name or "").lower()
+    for hint, slug in PRODUCT_L2_REMAP_HINTS:
+        if hint in lowered:
+            return slug
+    return None
+
+
 DEFAULT_BUSINESS_HOURS = {
     "mon": {"open": "10:00", "close": "22:00", "closed": False},
     "tue": {"open": "10:00", "close": "22:00", "closed": False},
