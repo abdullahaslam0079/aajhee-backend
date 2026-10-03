@@ -80,6 +80,15 @@ from .serializers_commerce import (
     ProductSerializer,
     serialize_delivery_options,
 )
+from .store_catalog import (
+    build_store_header_payload,
+    build_store_home_payload,
+    parse_preview_limit,
+    product_serializer_context,
+    resolve_store_context,
+    store_deals_qs,
+    store_products_qs,
+)
 from .visibility import business_is_visible, resolve_business_visibility
 
 
@@ -307,47 +316,21 @@ class HomeFeedsAPIView(ProductsFeedMixin, APIView):
 
 
 class StoreCatalogAPIView(ProductsFeedMixin, APIView):
+    """Legacy full-catalog payload. Prefer header/home/deals/category endpoints."""
+
     permission_classes = [AllowAny]
 
     def get(self, request, business_id: int = None, branch_id: int = None):
-        location = self.get_user_location()
-        if branch_id:
-            branch = get_object_or_404(
-                Branch.objects.select_related(
-                    "business", "business__engagement_stats", "engagement_stats"
-                ).prefetch_related("contacts"),
-                pk=branch_id,
-            )
-            business = branch.business
-        else:
-            business = get_object_or_404(
-                Business.objects.select_related("engagement_stats"), pk=business_id
-            )
-            branch = (
-                business.branches.select_related("engagement_stats")
-                .order_by("id")
-                .first()
-            )
-
-        channels = resolve_business_visibility(business, location)
-        if not (channels.show_online or channels.show_instore):
-            return Response(
-                {"detail": "Business is not available in your area."},
-                status=status.HTTP_404_NOT_FOUND,
-            )
-
-        qs = self.base_product_qs().filter(business=business)
-        if branch:
-            qs = qs.annotate(_branch_count=Count("branches")).filter(
-                Q(_branch_count=0) | Q(branches=branch)
-            ).distinct()
-
-        discounted = list(
-            qs.filter(sale_price__isnull=False)
-            .extra(where=["sale_price < base_price"])
-            .order_by("-discount_percent", "name")
+        resolved = resolve_store_context(
+            self, business_id=business_id, branch_id=branch_id
         )
+        if isinstance(resolved, Response):
+            return resolved
+
+        qs = store_products_qs(self, resolved.business, resolved.branch)
+        discounted = list(store_deals_qs(qs))
         discounted_ids = {p.id for p in discounted}
+        # Legacy behavior: discounted items appear only under discounted[].
         rest = qs.exclude(id__in=discounted_ids).order_by("category__name", "name")
 
         by_category: dict[str, list] = {}
@@ -355,76 +338,102 @@ class StoreCatalogAPIView(ProductsFeedMixin, APIView):
             key = product.category.name
             by_category.setdefault(key, []).append(product)
 
-        from .review_service import branch_rating_payload
-
-        ctx = {"request": request}
-        if branch:
-            ctx["branch_id"] = branch.id
-        contacts = []
-        if branch:
-            contacts = BranchContactSerializer(branch.contacts.all(), many=True).data
-
-        delivery_options = []
-        if branch and location:
-            delivery_options = serialize_delivery_options(branch, location)
-
-        branch_ratings = branch_rating_payload(branch)
-
-        return Response(
+        ser_ctx = product_serializer_context(request, resolved.branch)
+        header = build_store_header_payload(request, ctx=resolved)
+        header["discounted"] = ProductSerializer(
+            discounted, many=True, context=ser_ctx
+        ).data
+        header["categories"] = [
             {
-                "business": {
-                    "id": business.id,
-                    "name": business.name,
-                    "presence_mode": business.presence_mode,
-                    "online_coverage": business.online_coverage,
-                    "show_online": channels.show_online,
-                    "show_instore": channels.show_instore,
-                    "rating_avg": str(
-                        getattr(
-                            getattr(business, "engagement_stats", None),
-                            "rating_avg",
-                            "0.00",
-                        )
-                        or "0.00"
-                    ),
-                    "rating_count": int(
-                        getattr(
-                            getattr(business, "engagement_stats", None),
-                            "rating_count",
-                            0,
-                        )
-                        or 0
-                    ),
-                },
-                "branch": (
-                    {
-                        "id": branch.id,
-                        "name": branch.name,
-                        "city": branch.city,
-                        "latitude": branch.latitude,
-                        "longitude": branch.longitude,
-                        "formatted_address": branch.formatted_address,
-                        "rating_avg": branch_ratings["rating_avg"],
-                        "rating_count": branch_ratings["rating_count"],
-                    }
-                    if branch
-                    else None
-                ),
-                "contacts": contacts,
-                "delivery_options": delivery_options,
-                "discounted": ProductSerializer(discounted, many=True, context=ctx).data,
-                "categories": [
-                    {
-                        "category_id": products[0].category_id,
-                        "category_name": name,
-                        "products": ProductSerializer(
-                            products, many=True, context=ctx
-                        ).data,
-                    }
-                    for name, products in by_category.items()
-                ],
+                "category_id": products[0].category_id,
+                "category_name": name,
+                "products": ProductSerializer(
+                    products, many=True, context=ser_ctx
+                ).data,
             }
+            for name, products in by_category.items()
+        ]
+        return Response(header)
+
+
+class StoreHeaderAPIView(ProductsFeedMixin, APIView):
+    permission_classes = [AllowAny]
+
+    def get(self, request, business_id: int = None, branch_id: int = None):
+        resolved = resolve_store_context(
+            self, business_id=business_id, branch_id=branch_id
         )
+        if isinstance(resolved, Response):
+            return resolved
+        return Response(build_store_header_payload(request, ctx=resolved))
+
+
+class StoreHomeAPIView(ProductsFeedMixin, APIView):
+    permission_classes = [AllowAny]
+
+    def get(self, request, business_id: int = None, branch_id: int = None):
+        resolved = resolve_store_context(
+            self, business_id=business_id, branch_id=branch_id
+        )
+        if isinstance(resolved, Response):
+            return resolved
+        preview_limit = parse_preview_limit(request)
+        return Response(
+            build_store_home_payload(
+                request,
+                view=self,
+                ctx=resolved,
+                preview_limit=preview_limit,
+            )
+        )
+
+
+class StoreDealsAPIView(ProductsFeedMixin, APIView):
+    permission_classes = [AllowAny]
+    pagination_class = StandardResultsSetPagination
+
+    def get(self, request, business_id: int = None, branch_id: int = None):
+        resolved = resolve_store_context(
+            self, business_id=business_id, branch_id=branch_id
+        )
+        if isinstance(resolved, Response):
+            return resolved
+        qs = store_deals_qs(store_products_qs(self, resolved.business, resolved.branch))
+        paginator = self.pagination_class()
+        page = paginator.paginate_queryset(qs, request, view=self)
+        ser_ctx = product_serializer_context(request, resolved.branch)
+        data = ProductSerializer(page, many=True, context=ser_ctx).data
+        return paginator.get_paginated_response(data)
+
+
+class StoreCategoryProductsAPIView(ProductsFeedMixin, APIView):
+    permission_classes = [AllowAny]
+    pagination_class = StandardResultsSetPagination
+
+    def get(
+        self,
+        request,
+        category_id: int,
+        business_id: int = None,
+        branch_id: int = None,
+    ):
+        resolved = resolve_store_context(
+            self, business_id=business_id, branch_id=branch_id
+        )
+        if isinstance(resolved, Response):
+            return resolved
+
+        get_object_or_404(Category, pk=category_id, is_active=True)
+        qs = (
+            store_products_qs(self, resolved.business, resolved.branch)
+            .filter(product_category_q(category_id))
+            .order_by("name", "id")
+        )
+        paginator = self.pagination_class()
+        page = paginator.paginate_queryset(qs, request, view=self)
+        ser_ctx = product_serializer_context(request, resolved.branch)
+        data = ProductSerializer(page, many=True, context=ser_ctx).data
+        return paginator.get_paginated_response(data)
 
 
 class BranchDeliveryOptionsAPIView(UserLocationContextMixin, APIView):

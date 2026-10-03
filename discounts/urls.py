@@ -132,6 +132,10 @@ from .views_commerce import (
     ProductListAPIView,
     ProductViewAPIView,
     StoreCatalogAPIView,
+    StoreCategoryProductsAPIView,
+    StoreDealsAPIView,
+    StoreHeaderAPIView,
+    StoreHomeAPIView,
 )
 from .views_reviews import (
     AdminReviewDismissFlagAPIView,
@@ -199,6 +203,46 @@ urlpatterns = [
         "stores/branch/<int:branch_id>/catalog",
         StoreCatalogAPIView.as_view(),
         name="store-catalog-branch",
+    ),
+    path(
+        "stores/business/<int:business_id>/header",
+        StoreHeaderAPIView.as_view(),
+        name="store-header-business",
+    ),
+    path(
+        "stores/branch/<int:branch_id>/header",
+        StoreHeaderAPIView.as_view(),
+        name="store-header-branch",
+    ),
+    path(
+        "stores/business/<int:business_id>/home",
+        StoreHomeAPIView.as_view(),
+        name="store-home-business",
+    ),
+    path(
+        "stores/branch/<int:branch_id>/home",
+        StoreHomeAPIView.as_view(),
+        name="store-home-branch",
+    ),
+    path(
+        "stores/business/<int:business_id>/deals",
+        StoreDealsAPIView.as_view(),
+        name="store-deals-business",
+    ),
+    path(
+        "stores/branch/<int:branch_id>/deals",
+        StoreDealsAPIView.as_view(),
+        name="store-deals-branch",
+    ),
+    path(
+        "stores/business/<int:business_id>/categories/<int:category_id>/products",
+        StoreCategoryProductsAPIView.as_view(),
+        name="store-category-products-business",
+    ),
+    path(
+        "stores/branch/<int:branch_id>/categories/<int:category_id>/products",
+        StoreCategoryProductsAPIView.as_view(),
+        name="store-category-products-branch",
     ),
     path(
         "branches/<int:branch_id>/delivery-options",

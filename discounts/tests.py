@@ -2657,3 +2657,113 @@ class StockReservationTests(TestCase):
         self.unlimited.refresh_from_db()
         self.assertIsNone(self.unlimited.stock_quantity)
         self.assertTrue(self.unlimited.is_available)
+
+
+class ScaledStoreCatalogAPITests(APITestCase):
+    """Header / home / deals / category product endpoints for store scale-out."""
+
+    def setUp(self):
+        from .models import Product
+
+        self.owner = User.objects.create_user(
+            email="scaled-store-owner@example.com",
+            password="testpass123",
+            account_type=User.AccountType.BUSINESS,
+        )
+        self.category_a = Category.objects.create(name="Fruits")
+        self.category_b = Category.objects.create(name="Dairy")
+        self.business = Business.objects.create(
+            owner=self.owner,
+            name="Scaled Mart",
+            category=self.category_a,
+            verification_status=Business.VerificationStatus.VERIFIED,
+            presence_mode=Business.PresenceMode.HYBRID,
+        )
+        self.branch = Branch.objects.create(
+            business=self.business,
+            name="Main",
+            street="Mall Road",
+            house_number="1",
+            postal_code="54000",
+            city="Lahore",
+            latitude=Decimal("31.520000"),
+            longitude=Decimal("74.350000"),
+        )
+        self.deal = Product.objects.create(
+            business=self.business,
+            category=self.category_a,
+            name="Mango Box",
+            base_price=Decimal("500.00"),
+            sale_price=Decimal("400.00"),
+            discount_percent=Decimal("20.00"),
+        )
+        self.regular = Product.objects.create(
+            business=self.business,
+            category=self.category_a,
+            name="Apple Pack",
+            base_price=Decimal("300.00"),
+        )
+        self.dairy = Product.objects.create(
+            business=self.business,
+            category=self.category_b,
+            name="Milk 1L",
+            base_price=Decimal("250.00"),
+        )
+        for product in (self.deal, self.regular, self.dairy):
+            product.branches.set([self.branch])
+
+    def test_header_has_no_product_dumps(self):
+        response = self.client.get(f"/api/stores/branch/{self.branch.id}/header")
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+        self.assertEqual(response.data["business"]["name"], "Scaled Mart")
+        self.assertTrue(response.data["business"]["is_verified"])
+        self.assertNotIn("discounted", response.data)
+        self.assertNotIn("categories", response.data)
+        self.assertNotIn("deals", response.data)
+        self.assertIn("contacts", response.data)
+        self.assertIn("delivery_options", response.data)
+
+    def test_home_caps_previews_and_includes_deals_in_category(self):
+        response = self.client.get(
+            f"/api/stores/branch/{self.branch.id}/home",
+            {"preview_limit": 8},
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+        self.assertEqual(response.data["deals"]["count"], 1)
+        self.assertEqual(len(response.data["deals"]["preview"]), 1)
+        self.assertEqual(response.data["deals"]["preview"][0]["id"], self.deal.id)
+
+        categories = {
+            item["category_id"]: item for item in response.data["categories"]
+        }
+        self.assertIn(self.category_a.id, categories)
+        fruits = categories[self.category_a.id]
+        self.assertEqual(fruits["product_count"], 2)
+        fruit_ids = {p["id"] for p in fruits["preview"]}
+        self.assertIn(self.deal.id, fruit_ids)
+        self.assertIn(self.regular.id, fruit_ids)
+
+    def test_deals_and_category_products_paginate(self):
+        deals = self.client.get(
+            f"/api/stores/branch/{self.branch.id}/deals",
+            {"page": 1, "page_size": 1},
+        )
+        self.assertEqual(deals.status_code, status.HTTP_200_OK, deals.data)
+        self.assertEqual(deals.data["count"], 1)
+        self.assertEqual(len(deals.data["results"]), 1)
+        self.assertEqual(deals.data["results"][0]["id"], self.deal.id)
+
+        category = self.client.get(
+            f"/api/stores/branch/{self.branch.id}/categories/{self.category_a.id}/products",
+            {"page": 1, "page_size": 1},
+        )
+        self.assertEqual(category.status_code, status.HTTP_200_OK, category.data)
+        self.assertEqual(category.data["count"], 2)
+        self.assertEqual(len(category.data["results"]), 1)
+        self.assertIsNotNone(category.data["next"])
+
+    def test_business_scoped_home_works(self):
+        response = self.client.get(f"/api/stores/business/{self.business.id}/home")
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+        self.assertEqual(response.data["deals"]["count"], 1)
+        self.assertEqual(len(response.data["categories"]), 2)
