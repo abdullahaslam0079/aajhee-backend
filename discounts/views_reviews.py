@@ -10,7 +10,7 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from .models import Business, Order, OrderItem, Product, ProductReview
+from .models import Branch, Business, Order, OrderItem, Product, ProductReview
 from .pagination import page_payload, parse_page_params, slice_queryset
 from .permissions import IsAdminAccount, IsBusinessAccount, IsConsumerAccount
 from .review_service import (
@@ -20,6 +20,7 @@ from .review_service import (
     create_review,
     merchant_flag,
     merchant_reply,
+    parse_optional_branch_id,
     public_reviews_qs,
     update_review,
 )
@@ -34,8 +35,16 @@ from .serializers_commerce import (
 
 def _review_queryset():
     return ProductReview.objects.select_related(
-        "user", "product", "business", "order", "order_item"
+        "user", "product", "business", "branch", "order", "order_item"
     ).prefetch_related("images")
+
+
+def _apply_review_sort(qs, sort: str):
+    if sort == "highest":
+        return qs.order_by("-rating", "-created_at", "-id")
+    if sort == "lowest":
+        return qs.order_by("rating", "-created_at", "-id")
+    return qs.order_by("-created_at", "-id")
 
 
 class ConsumerOrderItemReviewCreateAPIView(APIView):
@@ -99,12 +108,10 @@ class ProductReviewListAPIView(APIView):
         page, page_size = parse_page_params(request)
         sort = (request.query_params.get("sort") or "newest").strip().lower()
         qs = public_reviews_qs().filter(product_id=product_id)
-        if sort == "highest":
-            qs = qs.order_by("-rating", "-created_at", "-id")
-        elif sort == "lowest":
-            qs = qs.order_by("rating", "-created_at", "-id")
-        else:
-            qs = qs.order_by("-created_at", "-id")
+        branch_id = parse_optional_branch_id(request.query_params.get("branch_id"))
+        if branch_id:
+            qs = qs.filter(branch_id=branch_id)
+        qs = _apply_review_sort(qs, sort)
         count, items = slice_queryset(qs, page, page_size)
         return Response(
             page_payload(
@@ -126,12 +133,35 @@ class BusinessReviewListPublicAPIView(APIView):
         page, page_size = parse_page_params(request)
         sort = (request.query_params.get("sort") or "newest").strip().lower()
         qs = public_reviews_qs().filter(business_id=business_id)
-        if sort == "highest":
-            qs = qs.order_by("-rating", "-created_at", "-id")
-        elif sort == "lowest":
-            qs = qs.order_by("rating", "-created_at", "-id")
-        else:
-            qs = qs.order_by("-created_at", "-id")
+        branch_id = parse_optional_branch_id(request.query_params.get("branch_id"))
+        if branch_id:
+            qs = qs.filter(branch_id=branch_id)
+        qs = _apply_review_sort(qs, sort)
+        count, items = slice_queryset(qs, page, page_size)
+        return Response(
+            page_payload(
+                count=count,
+                page=page,
+                page_size=page_size,
+                results=ProductReviewSerializer(
+                    items, many=True, context={"request": request}
+                ).data,
+            )
+        )
+
+
+class BranchReviewListPublicAPIView(APIView):
+    """Public reviews for a single store location."""
+
+    permission_classes = [AllowAny]
+
+    def get(self, request, branch_id: int):
+        get_object_or_404(Branch, pk=branch_id)
+        page, page_size = parse_page_params(request)
+        sort = (request.query_params.get("sort") or "newest").strip().lower()
+        qs = _apply_review_sort(
+            public_reviews_qs().filter(branch_id=branch_id), sort
+        )
         count, items = slice_queryset(qs, page, page_size)
         return Response(
             page_payload(
@@ -158,6 +188,9 @@ class BusinessReviewListAPIView(APIView):
         product_id = request.query_params.get("product_id")
         if product_id:
             qs = qs.filter(product_id=product_id)
+        branch_id = parse_optional_branch_id(request.query_params.get("branch_id"))
+        if branch_id:
+            qs = qs.filter(branch_id=branch_id)
         rating = request.query_params.get("rating")
         if rating:
             try:
@@ -200,9 +233,7 @@ class BusinessReviewReplyAPIView(APIView):
         serializer = MerchantReviewReplySerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         review = merchant_reply(
-            business=business,
-            review=review,
-            reply=serializer.validated_data["reply"],
+            business=business, review=review, reply=serializer.validated_data["reply"]
         )
         from .notification_utils import notify_customer_review_reply
 
@@ -242,6 +273,9 @@ class AdminReviewListAPIView(APIView):
         business_id = request.query_params.get("business_id")
         if business_id:
             qs = qs.filter(business_id=business_id)
+        branch_id = parse_optional_branch_id(request.query_params.get("branch_id"))
+        if branch_id:
+            qs = qs.filter(branch_id=branch_id)
         product_id = request.query_params.get("product_id")
         if product_id:
             qs = qs.filter(product_id=product_id)

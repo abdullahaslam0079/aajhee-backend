@@ -764,6 +764,21 @@ class BusinessEngagementStats(models.Model):
         return f"BusinessStats<{self.business_id}>"
 
 
+class BranchEngagementStats(models.Model):
+    """Per-location store rating aggregates (marketplace-style)."""
+
+    branch = models.OneToOneField(
+        Branch, on_delete=models.CASCADE, related_name="engagement_stats"
+    )
+    rating_avg = models.DecimalField(
+        max_digits=3, decimal_places=2, default=Decimal("0.00")
+    )
+    rating_count = models.PositiveIntegerField(default=0)
+
+    def __str__(self) -> str:
+        return f"BranchStats<{self.branch_id}>"
+
+
 class OfferLike(models.Model):
     user = models.ForeignKey(
         User, on_delete=models.CASCADE, related_name="offer_likes"
@@ -1163,6 +1178,33 @@ class ProductEngagementStats(models.Model):
         return f"ProductStats<{self.product_id}>"
 
 
+class ProductBranchEngagementStats(models.Model):
+    """Product ratings scoped to the fulfillment branch (product @ location)."""
+
+    product = models.ForeignKey(
+        Product, on_delete=models.CASCADE, related_name="branch_engagement_stats"
+    )
+    branch = models.ForeignKey(
+        Branch, on_delete=models.CASCADE, related_name="product_engagement_stats"
+    )
+    rating_avg = models.DecimalField(
+        max_digits=3, decimal_places=2, default=Decimal("0.00")
+    )
+    rating_count = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        verbose_name_plural = "product branch engagement stats"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["product", "branch"],
+                name="unique_product_branch_engagement_stats",
+            )
+        ]
+
+    def __str__(self) -> str:
+        return f"ProductBranchStats<{self.product_id}@{self.branch_id}>"
+
+
 class ProductLike(models.Model):
     user = models.ForeignKey(
         User, on_delete=models.CASCADE, related_name="product_likes"
@@ -1539,7 +1581,11 @@ class AuditLog(models.Model):
 
 
 class ProductReview(models.Model):
-    """Verified-purchase product review (one per delivered order line item)."""
+    """Verified-purchase product review (one per delivered order line item).
+
+    Reviews are tied to the fulfillment branch so each store location has its
+    own rating. New branches start at zero and never inherit sibling scores.
+    """
 
     class Status(models.TextChoices):
         PUBLISHED = "published", "Published"
@@ -1551,6 +1597,13 @@ class ProductReview(models.Model):
     )
     business = models.ForeignKey(
         Business, on_delete=models.CASCADE, related_name="product_reviews"
+    )
+    branch = models.ForeignKey(
+        "Branch",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="product_reviews",
     )
     product = models.ForeignKey(
         Product, on_delete=models.CASCADE, related_name="reviews"
@@ -1584,6 +1637,8 @@ class ProductReview(models.Model):
         indexes = [
             models.Index(fields=["product", "status", "-created_at"]),
             models.Index(fields=["business", "status", "-created_at"]),
+            models.Index(fields=["branch", "status", "-created_at"]),
+            models.Index(fields=["product", "branch", "status"]),
         ]
         constraints = [
             models.CheckConstraint(

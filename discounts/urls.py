@@ -138,6 +138,7 @@ from .views_reviews import (
     AdminReviewHideAPIView,
     AdminReviewListAPIView,
     AdminReviewRestoreAPIView,
+    BranchReviewListPublicAPIView,
     BusinessReviewFlagAPIView,
     BusinessReviewListAPIView,
     BusinessReviewListPublicAPIView,
@@ -177,6 +178,11 @@ urlpatterns = [
         "businesses/<int:business_id>/reviews",
         BusinessReviewListPublicAPIView.as_view(),
         name="business-reviews-public",
+    ),
+    path(
+        "branches/<int:branch_id>/reviews",
+        BranchReviewListPublicAPIView.as_view(),
+        name="branch-reviews-public",
     ),
     path(
         "reviews/<int:review_id>",

@@ -10,6 +10,7 @@ from .models import (
     AuditLog,
     Branch,
     BranchContact,
+    BranchEngagementStats,
     BranchFulfillmentSettings,
     Business,
     BusinessCategory,
@@ -32,6 +33,7 @@ from .models import (
     OrderProblemReportNote,
     OrderStatusHistory,
     Product,
+    ProductBranchEngagementStats,
     ProductReview,
     ProductReviewImage,
     User,
@@ -425,6 +427,7 @@ class ProductReviewAdmin(admin.ModelAdmin):
         "id",
         "product",
         "business",
+        "branch",
         "user",
         "rating",
         "status",
@@ -434,12 +437,26 @@ class ProductReviewAdmin(admin.ModelAdmin):
     search_fields = (
         "product__name",
         "business__name",
+        "branch__name",
         "user__email",
         "comment",
         "order__public_id",
     )
     readonly_fields = ("created_at", "updated_at", "edited_at", "flagged_at")
+    list_select_related = ("product", "business", "branch", "user")
     inlines = [ProductReviewImageInline]
+
+
+@admin.register(BranchEngagementStats)
+class BranchEngagementStatsAdmin(admin.ModelAdmin):
+    list_display = ("branch", "rating_avg", "rating_count")
+    search_fields = ("branch__name", "branch__business__name")
+
+
+@admin.register(ProductBranchEngagementStats)
+class ProductBranchEngagementStatsAdmin(admin.ModelAdmin):
+    list_display = ("product", "branch", "rating_avg", "rating_count")
+    search_fields = ("product__name", "branch__name")
 
 
 @admin.register(BranchContact)

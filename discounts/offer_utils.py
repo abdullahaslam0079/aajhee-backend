@@ -506,7 +506,9 @@ def branch_highlight_queryset(queryset, now=None):
     now = now or timezone.now()
     return annotate_branch_highlights(
         prefetch_branch_offers(
-            queryset.select_related("business", "business__category"),
+            queryset.select_related(
+                "business", "business__category", "engagement_stats"
+            ),
             now,
         ),
         now,

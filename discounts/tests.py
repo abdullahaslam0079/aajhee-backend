@@ -2109,6 +2109,7 @@ class ProductReviewAPITests(APITestCase):
         self.assertEqual(product_detail.data["rating_avg"], "5.00")
 
         from .models import BusinessEngagementStats, ProductEngagementStats
+        from .models import BranchEngagementStats, ProductBranchEngagementStats
 
         pstats = ProductEngagementStats.objects.get(product=self.product)
         self.assertEqual(pstats.rating_count, 1)
@@ -2116,6 +2117,15 @@ class ProductReviewAPITests(APITestCase):
         bstats = BusinessEngagementStats.objects.get(business=self.business)
         self.assertEqual(bstats.rating_count, 1)
         self.assertEqual(str(bstats.rating_avg), "5.00")
+        branch_stats = BranchEngagementStats.objects.get(branch=self.branch)
+        self.assertEqual(branch_stats.rating_count, 1)
+        self.assertEqual(str(branch_stats.rating_avg), "5.00")
+        pb_stats = ProductBranchEngagementStats.objects.get(
+            product=self.product, branch=self.branch
+        )
+        self.assertEqual(pb_stats.rating_count, 1)
+        self.assertEqual(str(pb_stats.rating_avg), "5.00")
+        self.assertEqual(response.data["branch_id"], self.branch.id)
 
     def test_duplicate_review_rejected(self):
         self.client.force_authenticate(user=self.consumer)
@@ -2216,6 +2226,216 @@ class ProductReviewAPITests(APITestCase):
             format="multipart",
         )
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+
+class BranchScopedRatingTests(APITestCase):
+    """Marketplace rule: ratings stay isolated per fulfillment branch."""
+
+    def setUp(self):
+        from .models import Order, OrderItem, Product
+
+        self.consumer_a = User.objects.create_user(
+            email="branch-a@example.com",
+            password="testpass123",
+            account_type=User.AccountType.CONSUMER,
+        )
+        self.consumer_b = User.objects.create_user(
+            email="branch-b@example.com",
+            password="testpass123",
+            account_type=User.AccountType.CONSUMER,
+        )
+        self.owner = User.objects.create_user(
+            email="multi-branch-merchant@example.com",
+            password="testpass123",
+            account_type=User.AccountType.BUSINESS,
+        )
+        self.category = Category.objects.create(name="Branch Grocery")
+        self.business = Business.objects.create(
+            owner=self.owner,
+            name="City Fresh",
+            category=self.category,
+            verification_status=Business.VerificationStatus.VERIFIED,
+        )
+        self.branch_a = Branch.objects.create(
+            business=self.business,
+            name="Downtown",
+            street="A",
+            house_number="1",
+            postal_code="10001",
+            city="Berlin",
+            latitude=Decimal("52.520000"),
+            longitude=Decimal("13.405000"),
+        )
+        self.branch_b = Branch.objects.create(
+            business=self.business,
+            name="Uptown",
+            street="B",
+            house_number="2",
+            postal_code="10002",
+            city="Berlin",
+            latitude=Decimal("52.530000"),
+            longitude=Decimal("13.415000"),
+        )
+        self.branch_new = Branch.objects.create(
+            business=self.business,
+            name="New Area",
+            street="C",
+            house_number="3",
+            postal_code="10003",
+            city="Berlin",
+            latitude=Decimal("52.540000"),
+            longitude=Decimal("13.425000"),
+        )
+        self.product = Product.objects.create(
+            business=self.business,
+            category=self.category,
+            name="Shared Mango Box",
+            base_price=Decimal("400.00"),
+        )
+        self.product.branches.set([self.branch_a, self.branch_b, self.branch_new])
+
+        self.order_a = Order.objects.create(
+            user=self.consumer_a,
+            business=self.business,
+            branch=self.branch_a,
+            status=Order.Status.COMPLETED,
+            payment_status=Order.PaymentStatus.PAID,
+            fulfillment_type=Order.FulfillmentType.PICKUP,
+            payment_method=Order.PaymentMethod.CASH_ON_PICKUP,
+            subtotal=Decimal("400.00"),
+            delivery_fee=Decimal("0.00"),
+            total=Decimal("400.00"),
+        )
+        self.item_a = OrderItem.objects.create(
+            order=self.order_a,
+            product=self.product,
+            product_name=self.product.name,
+            unit_base_price=Decimal("400.00"),
+            unit_sale_price=Decimal("400.00"),
+            quantity=1,
+            line_total=Decimal("400.00"),
+        )
+        self.order_b = Order.objects.create(
+            user=self.consumer_b,
+            business=self.business,
+            branch=self.branch_b,
+            status=Order.Status.COMPLETED,
+            payment_status=Order.PaymentStatus.PAID,
+            fulfillment_type=Order.FulfillmentType.PICKUP,
+            payment_method=Order.PaymentMethod.CASH_ON_PICKUP,
+            subtotal=Decimal("400.00"),
+            delivery_fee=Decimal("0.00"),
+            total=Decimal("400.00"),
+        )
+        self.item_b = OrderItem.objects.create(
+            order=self.order_b,
+            product=self.product,
+            product_name=self.product.name,
+            unit_base_price=Decimal("400.00"),
+            unit_sale_price=Decimal("400.00"),
+            quantity=1,
+            line_total=Decimal("400.00"),
+        )
+
+    def test_review_at_branch_a_does_not_affect_branch_b_or_new_branch(self):
+        from .models import BranchEngagementStats, ProductBranchEngagementStats
+
+        self.client.force_authenticate(user=self.consumer_a)
+        created = self.client.post(
+            f"/api/orders/{self.order_a.public_id}/items/{self.item_a.id}/reviews",
+            {"rating": 5, "comment": "Great downtown"},
+            format="multipart",
+        )
+        self.assertEqual(created.status_code, status.HTTP_201_CREATED, created.data)
+        self.assertEqual(created.data["branch_id"], self.branch_a.id)
+
+        a_stats = BranchEngagementStats.objects.get(branch=self.branch_a)
+        self.assertEqual(a_stats.rating_count, 1)
+        self.assertEqual(str(a_stats.rating_avg), "5.00")
+
+        self.assertFalse(
+            BranchEngagementStats.objects.filter(branch=self.branch_b).exists()
+        )
+        self.assertFalse(
+            BranchEngagementStats.objects.filter(branch=self.branch_new).exists()
+        )
+        self.assertFalse(
+            ProductBranchEngagementStats.objects.filter(
+                product=self.product, branch=self.branch_b
+            ).exists()
+        )
+
+        catalog_b = self.client.get(f"/api/stores/branch/{self.branch_b.id}/catalog")
+        self.assertEqual(catalog_b.status_code, status.HTTP_200_OK)
+        self.assertEqual(catalog_b.data["branch"]["rating_count"], 0)
+        self.assertEqual(catalog_b.data["branch"]["rating_avg"], "0.00")
+        products_b = catalog_b.data["categories"][0]["products"]
+        self.assertEqual(products_b[0]["rating_count"], 0)
+
+        catalog_new = self.client.get(
+            f"/api/stores/branch/{self.branch_new.id}/catalog"
+        )
+        self.assertEqual(catalog_new.data["branch"]["rating_count"], 0)
+
+    def test_separate_branch_ratings_and_scoped_product_api(self):
+        self.client.force_authenticate(user=self.consumer_a)
+        self.client.post(
+            f"/api/orders/{self.order_a.public_id}/items/{self.item_a.id}/reviews",
+            {"rating": 5},
+            format="multipart",
+        )
+        self.client.force_authenticate(user=self.consumer_b)
+        self.client.post(
+            f"/api/orders/{self.order_b.public_id}/items/{self.item_b.id}/reviews",
+            {"rating": 1},
+            format="multipart",
+        )
+
+        catalog_a = self.client.get(f"/api/stores/branch/{self.branch_a.id}/catalog")
+        catalog_b = self.client.get(f"/api/stores/branch/{self.branch_b.id}/catalog")
+        self.assertEqual(catalog_a.data["branch"]["rating_avg"], "5.00")
+        self.assertEqual(catalog_a.data["branch"]["rating_count"], 1)
+        self.assertEqual(catalog_b.data["branch"]["rating_avg"], "1.00")
+        self.assertEqual(catalog_b.data["branch"]["rating_count"], 1)
+        # Business rollup averages both locations.
+        self.assertEqual(catalog_a.data["business"]["rating_count"], 2)
+        self.assertEqual(catalog_a.data["business"]["rating_avg"], "3.00")
+
+        product_a = self.client.get(
+            f"/api/products/{self.product.id}", {"branch_id": self.branch_a.id}
+        )
+        product_b = self.client.get(
+            f"/api/products/{self.product.id}", {"branch_id": self.branch_b.id}
+        )
+        product_all = self.client.get(f"/api/products/{self.product.id}")
+        self.assertEqual(product_a.data["rating_avg"], "5.00")
+        self.assertEqual(product_a.data["rating_count"], 1)
+        self.assertEqual(product_b.data["rating_avg"], "1.00")
+        self.assertEqual(product_b.data["rating_count"], 1)
+        self.assertEqual(product_all.data["rating_count"], 2)
+        self.assertEqual(product_all.data["rating_avg"], "3.00")
+
+        reviews_a = self.client.get(
+            f"/api/products/{self.product.id}/reviews",
+            {"branch_id": self.branch_a.id},
+        )
+        reviews_branch = self.client.get(
+            f"/api/branches/{self.branch_a.id}/reviews"
+        )
+        self.assertEqual(reviews_a.data["count"], 1)
+        self.assertEqual(reviews_a.data["results"][0]["rating"], 5)
+        self.assertEqual(reviews_branch.data["count"], 1)
+
+        map_resp = self.client.get(
+            "/api/map/branches", {"branch_id": self.branch_a.id}
+        )
+        self.assertEqual(map_resp.status_code, status.HTTP_200_OK)
+        self.assertGreaterEqual(map_resp.data["count"], 1)
+        row = next(
+            r for r in map_resp.data["results"] if r["id"] == self.branch_a.id
+        )
+        self.assertEqual(row["rating_avg"], "5.00")
+        self.assertEqual(row["rating_count"], 1)
 
 
 class StockReservationTests(TestCase):

@@ -574,6 +574,8 @@ class MapBranchSerializer(BranchHighlightSerializer):
     distance_km = serializers.SerializerMethodField()
     products_count = serializers.SerializerMethodField()
     top_products = serializers.SerializerMethodField()
+    rating_avg = serializers.SerializerMethodField()
+    rating_count = serializers.SerializerMethodField()
 
     class Meta(BranchHighlightSerializer.Meta):
         fields = BranchHighlightSerializer.Meta.fields + [
@@ -590,6 +592,8 @@ class MapBranchSerializer(BranchHighlightSerializer):
             "distance_km",
             "products_count",
             "top_products",
+            "rating_avg",
+            "rating_count",
         ]
 
     def get_distance_km(self, obj: Branch):
@@ -607,6 +611,16 @@ class MapBranchSerializer(BranchHighlightSerializer):
         return BranchTopProductSerializer(
             products, many=True, context=self.context
         ).data
+
+    def get_rating_avg(self, obj: Branch) -> str:
+        stats = getattr(obj, "engagement_stats", None)
+        if not stats:
+            return "0.00"
+        return str(stats.rating_avg)
+
+    def get_rating_count(self, obj: Branch) -> int:
+        stats = getattr(obj, "engagement_stats", None)
+        return int(stats.rating_count) if stats else 0
 
 
 class MapBusinessSerializer(serializers.ModelSerializer):

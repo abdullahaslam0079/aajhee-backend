@@ -1,4 +1,11 @@
-"""Verified-purchase product review rules and rating aggregates."""
+"""Verified-purchase product review rules and rating aggregates.
+
+Marketplace model: every review is tied to the fulfillment branch.
+- BranchEngagementStats: store-location rating shown on map/catalog cards
+- ProductBranchEngagementStats: product stars inside a specific store
+- ProductEngagementStats / BusinessEngagementStats: overall rollups
+New branches start at zero and never inherit sibling location scores.
+"""
 
 from __future__ import annotations
 
@@ -11,11 +18,14 @@ from django.utils import timezone
 from rest_framework.exceptions import PermissionDenied, ValidationError
 
 from .models import (
+    Branch,
+    BranchEngagementStats,
     Business,
     BusinessEngagementStats,
     Order,
     OrderItem,
     Product,
+    ProductBranchEngagementStats,
     ProductEngagementStats,
     ProductReview,
     ProductReviewImage,
@@ -36,6 +46,26 @@ def ensure_business_engagement_stats(business: Business) -> BusinessEngagementSt
     return stats
 
 
+def ensure_branch_engagement_stats(branch: Branch) -> BranchEngagementStats:
+    stats, _ = BranchEngagementStats.objects.get_or_create(branch=branch)
+    return stats
+
+
+def ensure_product_branch_engagement_stats(
+    product: Product, branch: Branch
+) -> ProductBranchEngagementStats:
+    stats, _ = ProductBranchEngagementStats.objects.get_or_create(
+        product=product, branch=branch
+    )
+    return stats
+
+
+def _quantize_avg(avg, count: int) -> Decimal:
+    if not count:
+        return Decimal("0.00")
+    return Decimal(str(avg or 0)).quantize(Decimal("0.01"))
+
+
 def recompute_product_rating(product: Product | int) -> ProductEngagementStats:
     product_id = product if isinstance(product, int) else product.pk
     product_obj = (
@@ -46,7 +76,7 @@ def recompute_product_rating(product: Product | int) -> ProductEngagementStats:
         product_id=product_id, status__in=PUBLIC_STATUSES
     ).aggregate(avg=Avg("rating"), count=Count("id"))
     count = int(agg["count"] or 0)
-    avg = Decimal(str(agg["avg"] or 0)).quantize(Decimal("0.01")) if count else Decimal("0.00")
+    avg = _quantize_avg(agg["avg"], count)
     ProductEngagementStats.objects.filter(pk=stats.pk).update(
         rating_avg=avg, rating_count=count
     )
@@ -66,8 +96,56 @@ def recompute_business_rating(business: Business | int) -> BusinessEngagementSta
         business_id=business_id, status__in=PUBLIC_STATUSES
     ).aggregate(avg=Avg("rating"), count=Count("id"))
     count = int(agg["count"] or 0)
-    avg = Decimal(str(agg["avg"] or 0)).quantize(Decimal("0.01")) if count else Decimal("0.00")
+    avg = _quantize_avg(agg["avg"], count)
     BusinessEngagementStats.objects.filter(pk=stats.pk).update(
+        rating_avg=avg, rating_count=count
+    )
+    stats.refresh_from_db()
+    return stats
+
+
+def recompute_branch_rating(branch: Branch | int) -> BranchEngagementStats | None:
+    branch_id = branch if isinstance(branch, int) else getattr(branch, "pk", None)
+    if not branch_id:
+        return None
+    branch_obj = (
+        branch if isinstance(branch, Branch) else Branch.objects.get(pk=branch_id)
+    )
+    stats = ensure_branch_engagement_stats(branch_obj)
+    agg = ProductReview.objects.filter(
+        branch_id=branch_id, status__in=PUBLIC_STATUSES
+    ).aggregate(avg=Avg("rating"), count=Count("id"))
+    count = int(agg["count"] or 0)
+    avg = _quantize_avg(agg["avg"], count)
+    BranchEngagementStats.objects.filter(pk=stats.pk).update(
+        rating_avg=avg, rating_count=count
+    )
+    stats.refresh_from_db()
+    return stats
+
+
+def recompute_product_branch_rating(
+    product: Product | int, branch: Branch | int
+) -> ProductBranchEngagementStats | None:
+    product_id = product if isinstance(product, int) else getattr(product, "pk", None)
+    branch_id = branch if isinstance(branch, int) else getattr(branch, "pk", None)
+    if not product_id or not branch_id:
+        return None
+    product_obj = (
+        product if isinstance(product, Product) else Product.objects.get(pk=product_id)
+    )
+    branch_obj = (
+        branch if isinstance(branch, Branch) else Branch.objects.get(pk=branch_id)
+    )
+    stats = ensure_product_branch_engagement_stats(product_obj, branch_obj)
+    agg = ProductReview.objects.filter(
+        product_id=product_id,
+        branch_id=branch_id,
+        status__in=PUBLIC_STATUSES,
+    ).aggregate(avg=Avg("rating"), count=Count("id"))
+    count = int(agg["count"] or 0)
+    avg = _quantize_avg(agg["avg"], count)
+    ProductBranchEngagementStats.objects.filter(pk=stats.pk).update(
         rating_avg=avg, rating_count=count
     )
     stats.refresh_from_db()
@@ -77,6 +155,22 @@ def recompute_business_rating(business: Business | int) -> BusinessEngagementSta
 def recompute_ratings_for_review(review: ProductReview) -> None:
     recompute_product_rating(review.product_id)
     recompute_business_rating(review.business_id)
+    if review.branch_id:
+        recompute_branch_rating(review.branch_id)
+        recompute_product_branch_rating(review.product_id, review.branch_id)
+
+
+def branch_rating_payload(branch: Branch | None) -> dict:
+    """Serialize branch store rating for catalog/map responses."""
+    if branch is None:
+        return {"rating_avg": "0.00", "rating_count": 0}
+    stats = getattr(branch, "engagement_stats", None)
+    if stats is None:
+        return {"rating_avg": "0.00", "rating_count": 0}
+    return {
+        "rating_avg": str(stats.rating_avg or "0.00"),
+        "rating_count": int(stats.rating_count or 0),
+    }
 
 
 def can_review_order_item(*, user, order: Order, order_item: OrderItem) -> bool:
@@ -177,6 +271,7 @@ def create_review(
     review = ProductReview.objects.create(
         user=user,
         business_id=order.business_id,
+        branch_id=order.branch_id,
         product_id=order_item.product_id,
         order=order,
         order_item=order_item,
@@ -306,5 +401,15 @@ def admin_dismiss_flag(review: ProductReview) -> ProductReview:
 
 def public_reviews_qs():
     return ProductReview.objects.filter(status__in=PUBLIC_STATUSES).select_related(
-        "user", "product", "business", "order", "order_item"
+        "user", "product", "business", "branch", "order", "order_item"
     ).prefetch_related("images")
+
+
+def parse_optional_branch_id(raw) -> int | None:
+    if raw is None or raw == "":
+        return None
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None

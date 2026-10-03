@@ -283,6 +283,28 @@ class ProductSerializer(serializers.ModelSerializer):
     def _stats(self, obj: Product):
         return getattr(obj, "engagement_stats", None)
 
+    def _branch_rating_stats(self, obj: Product):
+        """When serializing in a store context, prefer product@branch ratings."""
+        branch_id = self.context.get("branch_id")
+        if not branch_id:
+            return None
+        by_branch = getattr(obj, "_branch_rating_by_id", None)
+        if isinstance(by_branch, dict) and branch_id in by_branch:
+            return by_branch[branch_id]
+        related = getattr(obj, "branch_engagement_stats", None)
+        if related is not None:
+            try:
+                for stats in related.all():
+                    if stats.branch_id == branch_id:
+                        return stats
+            except (AttributeError, TypeError):
+                pass
+        from .models import ProductBranchEngagementStats
+
+        return ProductBranchEngagementStats.objects.filter(
+            product_id=obj.pk, branch_id=branch_id
+        ).first()
+
     def get_view_count(self, obj: Product) -> int:
         stats = self._stats(obj)
         return stats.view_count if stats else 0
@@ -296,12 +318,22 @@ class ProductSerializer(serializers.ModelSerializer):
         return stats.order_count if stats else 0
 
     def get_rating_avg(self, obj: Product) -> str:
+        if self.context.get("branch_id"):
+            branch_stats = self._branch_rating_stats(obj)
+            if branch_stats is None:
+                return "0.00"
+            return str(branch_stats.rating_avg)
         stats = self._stats(obj)
         if not stats:
             return "0.00"
         return str(stats.rating_avg)
 
     def get_rating_count(self, obj: Product) -> int:
+        if self.context.get("branch_id"):
+            branch_stats = self._branch_rating_stats(obj)
+            if branch_stats is None:
+                return 0
+            return int(branch_stats.rating_count or 0)
         stats = self._stats(obj)
         return stats.rating_count if stats else 0
 
@@ -538,6 +570,8 @@ class ProductReviewSerializer(serializers.ModelSerializer):
     product_id = serializers.IntegerField(source="product.id", read_only=True)
     business_id = serializers.IntegerField(source="business.id", read_only=True)
     business_name = serializers.CharField(source="business.name", read_only=True)
+    branch_id = serializers.SerializerMethodField()
+    branch_name = serializers.SerializerMethodField()
     user_display_name = serializers.SerializerMethodField()
     order_public_id = serializers.UUIDField(source="order.public_id", read_only=True)
     order_item_id = serializers.IntegerField(read_only=True)
@@ -552,6 +586,8 @@ class ProductReviewSerializer(serializers.ModelSerializer):
             "product_name",
             "business_id",
             "business_name",
+            "branch_id",
+            "branch_name",
             "order_public_id",
             "order_item_id",
             "rating",
@@ -570,6 +606,13 @@ class ProductReviewSerializer(serializers.ModelSerializer):
             "updated_at",
         ]
         read_only_fields = fields
+
+    def get_branch_id(self, obj: ProductReview) -> int | None:
+        return obj.branch_id
+
+    def get_branch_name(self, obj: ProductReview) -> str | None:
+        branch = getattr(obj, "branch", None)
+        return branch.name if branch is not None else None
 
     def get_user_display_name(self, obj: ProductReview) -> str:
         user = obj.user

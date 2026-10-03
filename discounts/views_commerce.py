@@ -149,7 +149,7 @@ class ProductsFeedMixin(UserLocationContextMixin):
         return (
             Product.objects.filter(is_enabled=True, is_available=True)
             .select_related("business", "category", "engagement_stats")
-            .prefetch_related("branches", "gallery_images")
+            .prefetch_related("branches", "gallery_images", "branch_engagement_stats")
         )
 
     def filter_visible_products(self, qs):
@@ -166,6 +166,17 @@ class ProductsFeedMixin(UserLocationContextMixin):
             if business and business_is_visible(business, location):
                 visible_ids.append(product.id)
         return qs.filter(id__in=visible_ids)
+
+    def get_serializer_context(self):
+        ctx = super().get_serializer_context()
+        from .review_service import parse_optional_branch_id
+
+        branch_id = parse_optional_branch_id(
+            self.request.query_params.get("branch_id")
+        )
+        if branch_id:
+            ctx["branch_id"] = branch_id
+        return ctx
 
 
 class ProductListAPIView(ProductsFeedMixin, generics.ListAPIView):
@@ -302,7 +313,9 @@ class StoreCatalogAPIView(ProductsFeedMixin, APIView):
         location = self.get_user_location()
         if branch_id:
             branch = get_object_or_404(
-                Branch.objects.select_related("business", "business__engagement_stats").prefetch_related("contacts"),
+                Branch.objects.select_related(
+                    "business", "business__engagement_stats", "engagement_stats"
+                ).prefetch_related("contacts"),
                 pk=branch_id,
             )
             business = branch.business
@@ -310,7 +323,11 @@ class StoreCatalogAPIView(ProductsFeedMixin, APIView):
             business = get_object_or_404(
                 Business.objects.select_related("engagement_stats"), pk=business_id
             )
-            branch = business.branches.order_by("id").first()
+            branch = (
+                business.branches.select_related("engagement_stats")
+                .order_by("id")
+                .first()
+            )
 
         channels = resolve_business_visibility(business, location)
         if not (channels.show_online or channels.show_instore):
@@ -338,7 +355,11 @@ class StoreCatalogAPIView(ProductsFeedMixin, APIView):
             key = product.category.name
             by_category.setdefault(key, []).append(product)
 
+        from .review_service import branch_rating_payload
+
         ctx = {"request": request}
+        if branch:
+            ctx["branch_id"] = branch.id
         contacts = []
         if branch:
             contacts = BranchContactSerializer(branch.contacts.all(), many=True).data
@@ -346,6 +367,8 @@ class StoreCatalogAPIView(ProductsFeedMixin, APIView):
         delivery_options = []
         if branch and location:
             delivery_options = serialize_delivery_options(branch, location)
+
+        branch_ratings = branch_rating_payload(branch)
 
         return Response(
             {
@@ -381,6 +404,8 @@ class StoreCatalogAPIView(ProductsFeedMixin, APIView):
                         "latitude": branch.latitude,
                         "longitude": branch.longitude,
                         "formatted_address": branch.formatted_address,
+                        "rating_avg": branch_ratings["rating_avg"],
+                        "rating_count": branch_ratings["rating_count"],
                     }
                     if branch
                     else None
